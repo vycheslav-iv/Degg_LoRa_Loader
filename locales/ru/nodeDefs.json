@@ -1,0 +1,24 @@
+{
+  "Degg_LoRa_Loader": {
+    "display_name": "Загрузчик LoRa Degg",
+    "description": "Применяет список LoRA из JSON с вкл/выкл и силой воздействия, с превью из папки и данными CivitAI.",
+    "inputs": {
+      "loras_data": {
+        "name": "список LoRA",
+        "tooltip": "JSON-список LoRA с вкл/выкл и силой"
+      },
+      "model": {
+        "name": "модель",
+        "tooltip": "Цепочка модели для применения LoRA"
+      },
+      "clip": {
+        "name": "клип",
+        "tooltip": "Цепочка клипа для применения LoRA"
+      }
+    },
+    "outputs": {
+      "0": { "name": "модель" },
+      "1": { "name": "клип" }
+    }
+  }
+}

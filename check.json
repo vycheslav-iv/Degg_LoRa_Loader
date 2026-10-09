@@ -1,0 +1,22 @@
+{
+  "checks": [
+    {
+      "label": "python",
+      "cmd": "python tests/_test_degg_lora_loader.py",
+      "expect": ["FAIL: 0", "ТЕСТ ПРОЙДЕН"],
+      "description": "Python-песочница: роуты loras/img/info, кэш CivitAI по sha256, parse_loras, безопасность путей"
+    },
+    {
+      "label": "smoke",
+      "cmd": "node tests/_smoke_degg_lora_loader.mjs",
+      "expect": ["FAIL: 0", "SMOKE OK"],
+      "description": "JS-смоук в vm-контексте: персистентность, DOM-виджет, строки списка, модалки, локализация RU/EN"
+    },
+    {
+      "label": "audit",
+      "cmd": "node tests/_audit_degg_lora_loader.mjs",
+      "expect": ["FAIL: 0", "аудит чист"],
+      "description": "Статический аудит: согласованность Python/JS/locales/check.json и запрещённые приёмы AGENTS.md"
+    }
+  ]
+}

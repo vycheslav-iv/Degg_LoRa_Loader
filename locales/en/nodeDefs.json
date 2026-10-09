@@ -1,0 +1,24 @@
+{
+  "Degg_LoRa_Loader": {
+    "display_name": "Degg LoRa Loader",
+    "description": "Apply a list of LoRAs from JSON with on/off and strengths, with folder previews and CivitAI details.",
+    "inputs": {
+      "loras_data": {
+        "name": "lora list",
+        "tooltip": "JSON list of LoRAs with on/off and strengths"
+      },
+      "model": {
+        "name": "model",
+        "tooltip": "Model chain to apply LoRAs to"
+      },
+      "clip": {
+        "name": "clip",
+        "tooltip": "Clip chain to apply LoRAs to"
+      }
+    },
+    "outputs": {
+      "0": { "name": "model" },
+      "1": { "name": "clip" }
+    }
+  }
+}
