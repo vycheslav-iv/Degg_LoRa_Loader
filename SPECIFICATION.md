@@ -103,6 +103,13 @@ toggle-all) — JSON-массив. Загрузка: `onConfigure` читает
   onRemoved` вызываются, `computeSize`/`computeLayoutSize` не перезаписываются.
 - Корень пола: inline `height:100%; min-height:304px; display:flex;
   flex-direction:column; overflow:hidden` + `.dl-list{flex:1; overflow-y:auto}`.
+  **Без `margin` у корня**: фронтенд (`DomWidgets.vue`) сам позиционирует
+  оверлей `.dom-widget` с инсетом `widget.margin=10` (pos = node.pos+margin,
+  size − 2·margin); собственный `margin:10px` удваивал отступ, расталкивал
+  корень до краёв ноды (`w-full` + margin → border-box reaches node edge) и
+  футер-кнопка `.dl-add` перекрывала SE-угол — ресайз мышью в classic-режиме
+  не работал. Внешняя L-полоска 10px угловой зоны 15×15 обязана оставаться
+  канвасом (живая проба `tests/_probe_live_resize.py`).
   `hideOnZoom: false` (иначе превью исчезает при ds.scale < 0.6), `hideInPanel: true`.
 - Строка: `[toggle aria-checked][thumb 82][name][strength][✕]`.
   Тумблер и `toggleAll` меняют класс `dl-off`/счётчик на месте; остальные

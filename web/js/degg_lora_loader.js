@@ -14,7 +14,7 @@ const CONTENT_MIN_H = HEAD_H + ROW_H * LIST_ROWS;
 const MIN_W = 360;
 
 const CSS_TEXT = [
-  ".dl-root{height:100%;min-height:304px;display:flex;flex-direction:column;overflow:hidden;margin:10px;font-size:13px;color:#ddd;}",
+  ".dl-root{height:100%;min-height:304px;display:flex;flex-direction:column;overflow:hidden;font-size:13px;color:#ddd;}",
   ".dl-head{display:flex;align-items:center;gap:6px;height:34px;flex:0 0 auto;}",
   ".dl-add,.dl-all,.dl-x,.dl-del{font:inherit;cursor:pointer;}",
   ".dl-add{flex:0 0 auto;padding:4px 10px;border:1px solid #5a5a5a;border-radius:4px;background:#2a2a2a;color:#eee;}",
