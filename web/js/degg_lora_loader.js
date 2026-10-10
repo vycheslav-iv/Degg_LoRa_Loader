@@ -597,6 +597,7 @@ function render(node) {
     }
   }
   updateCount(node);
+  updateAllSw(node);
 }
 
 function refreshLabels(node) {

@@ -115,6 +115,10 @@ toggle-all) — JSON-массив. Загрузка: `onConfigure` читает
   Тумблер и `toggleAll` меняют класс `dl-off`/счётчик на месте; остальные
   мутации перерисовывают список и пишут JSON в `loras_data`.
   Клик по `name` (`dl-ln`) НЕ открывает карточку — только клик по `thumb` (`dl-thumb`).
+- **Toggle-all state**: `render()` ОБЯЗАН вызывать `updateAllSw()` в конце —
+  иначе при загрузке workflow переключатель «Все вкл/выкл» остаётся в начальном
+  состоянии (`aria-checked="true"`), хотя большинство лор выключены. Был баг:
+  после reload ComfyUI toggle показывал «все активны» при одной активной лоре.
 - **Перетаскивание за ручку (grip)**: `pointerdown/pointermove/pointerup/
   pointercancel` на `.dl-grip` (SVG-6 точек, `cursor:grab`, `touch-action:none`,
   ширина 22px, hover-подсветка). Ручка — третий ребёнок строки (между thumb и name).

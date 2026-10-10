@@ -487,7 +487,8 @@ check("обёртка toggle-all есть", !!allWrap);
 check("переключатель toggle-all есть", !!allSw);
 check("подпись toggle-all есть", !!allLabel);
 check("toggle-all — это switch (role=switch)", !!(allSw && allSw.getAttribute("role") === "switch"));
-check("toggle-all — синий при всех включённых", !!(allSw && allSw.getAttribute("aria-checked") === "true"));
+// BUG FIX: empty list → toggle-all must be OFF (not "all on")
+check("toggle-all — выключен при пустом списке", !!(allSw && allSw.getAttribute("aria-checked") === "false"));
 check("список есть", !!listEl);
 check("head: toggle-all первый ребёнок шапки",
   !!(head && head.children[0] && String(head.children[0].className).split(/\s+/).includes("dl-allwrap")),
@@ -537,6 +538,9 @@ protoHolder.onConfigure.call(node, { widgets_values_named: { loras_data: jsonStr
 check("onConfigure: строки из widgets_values_named", listEl.children.length === 2,
   String(listEl.children.length));
 check("onConfigure: loras_data.value совпадает", dataW.value === jsonStr, String(dataW.value));
+// BUG FIX: toggle-all state must reflect actual entries after configure
+check("onConfigure: toggle-all выключен (не все лоры активны)",
+  allSw.getAttribute("aria-checked") === "false", allSw.getAttribute("aria-checked"));
 
 const rows = listEl.children;
 const row0 = rows[0];
