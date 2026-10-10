@@ -7,11 +7,12 @@ const SCRUB_PX_PER_STEP = 10;
 const SCRUB_THRESHOLD = 50;
 // Состояние активной тяги: слой, строка и накопленный путь в пикселях.
 const SCRUB = { el: null, node: null, index: -1, startX: 0, startY: 0, delta: 0, swiping: false };
+const DRAG = { node: null, from: -1, to: -1, grip: null };
 const ROW_H = 90;
 const LIST_ROWS = 3;
 const MARGIN = 10;
 const CONTENT_MIN_H = HEAD_H + ROW_H * LIST_ROWS;
-const MIN_W = 360;
+const MIN_W = 380;
 
 const CSS_TEXT = [
   ".dl-root{height:100%;min-height:304px;display:flex;flex-direction:column;overflow:hidden;font-size:13px;color:#ddd;}",
@@ -28,6 +29,12 @@ const CSS_TEXT = [
   ".dl-empty{padding:16px 8px;text-align:center;color:#8a8a8a;}",
   ".dl-row{display:flex;align-items:center;gap:8px;height:82px;padding:4px 6px;border:1px solid #3a3a3a;border-radius:6px;background:#232323;}",
   ".dl-row.dl-off{opacity:.45;}",
+  ".dl-row.dl-dragging{opacity:.55;}",
+  ".dl-grip{flex:0 0 auto;width:22px;height:100%;display:flex;align-items:center;justify-content:center;cursor:grab;touch-action:none;color:#666;}",
+  ".dl-grip:hover{color:#bbb;background:rgba(255,255,255,0.04);}",
+  ".dl-grip:active{cursor:grabbing;}",
+  ".dl-row.dl-drop-before{box-shadow:inset 0 2px 0 0 var(--primary-background,#5b8def);}",
+  ".dl-row.dl-drop-after{box-shadow:inset 0 -2px 0 0 var(--primary-background,#5b8def);}",
   ".dl-sw{position:relative;flex:0 0 auto;width:40px;height:24px;padding:0;border:none;border-radius:12px;background:var(--interface-stroke,#4a4a4a);cursor:pointer;transition:background .15s;}",
   ".dl-sw[aria-checked=\"true\"]{background:var(--primary-background,#5b8def);}",
   ".dl-sw[aria-checked=\"true\"] .dl-knob{transform:translateX(16px);}",
@@ -106,6 +113,7 @@ const LOCALES = {
     incStrength: "Увеличить силу",
     decStrength: "Уменьшить силу",
     remove: "Удалить",
+    reorder: "Перетащить для изменения порядка",
     loadError: "Не удалось загрузить данные",
     uploadBtn: "Загрузить картинку…",
     resetBtn: "Сбросить",
@@ -124,6 +132,7 @@ const LOCALES = {
     incStrength: "Increase strength",
     decStrength: "Decrease strength",
     remove: "Remove",
+    reorder: "Drag to reorder",
     loadError: "Failed to load data",
     uploadBtn: "Upload image…",
     resetBtn: "Reset",
@@ -453,6 +462,23 @@ function trashIcon() {
   return svg;
 }
 
+function gripIcon() {
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("width", "16");
+  svg.setAttribute("height", "16");
+  svg.setAttribute("fill", "currentColor");
+  const positions = [[9, 5], [15, 5], [9, 12], [15, 12], [9, 19], [15, 19]];
+  for (const [cx, cy] of positions) {
+    const c = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+    c.setAttribute("cx", String(cx));
+    c.setAttribute("cy", String(cy));
+    c.setAttribute("r", "1.5");
+    svg.appendChild(c);
+  }
+  return svg;
+}
+
 function buildRow(node, index) {
   const s = ensureState(node);
   const entry = s.entries[index];
@@ -473,9 +499,6 @@ function buildRow(node, index) {
   const bm = mk("div", "dl-bm");
   const ln = mk("div", "dl-ln");
   ln.textContent = entry.lora;
-  ln.addEventListener("click", function () {
-    openLoraCard(node, index);
-  });
   name.appendChild(bm);
   name.appendChild(ln);
   row.title = entry.lora;
@@ -537,7 +560,22 @@ function buildRow(node, index) {
   del.addEventListener("click", function () {
     removeAt(node, index);
   });
-  row.append(sw, thumb, name, num, del);
+  const grip = mk("div", "dl-grip");
+  grip.title = t("reorder");
+  grip.appendChild(gripIcon());
+  grip.addEventListener("pointerdown", function (ev) {
+    dragBegin(node, index, grip, ev);
+  });
+  grip.addEventListener("pointermove", function (ev) {
+    dragMove(ev);
+  });
+  grip.addEventListener("pointerup", function (ev) {
+    dragEnd(ev, false);
+  });
+  grip.addEventListener("pointercancel", function (ev) {
+    dragEnd(ev, true);
+  });
+  row.append(sw, thumb, grip, name, num, del);
   return row;
 }
 
@@ -569,6 +607,8 @@ function refreshLabels(node) {
     for (let i = 0; i < rows.length; i++) {
       const del = findByClass(rows[i], "dl-del");
       if (del) del.setAttribute("title", t("remove"));
+      const grip = findByClass(rows[i], "dl-grip");
+      if (grip) grip.setAttribute("title", t("reorder"));
       const dec = findByClass(rows[i], "dl-num-dec");
       if (dec) dec.setAttribute("aria-label", t("decStrength"));
       const inc = findByClass(rows[i], "dl-num-inc");
@@ -609,7 +649,7 @@ function toggleAt(node, index) {
   const row = s.list && s.list.children[index];
   if (row) {
     row.className = entry.on ? "dl-row" : "dl-row dl-off";
-    const sw = row.children[0];
+    const sw = findByClass(row, "dl-sw");
     if (sw && sw.setAttribute) sw.setAttribute("aria-checked", entry.on ? "true" : "false");
   }
   syncData(node);
@@ -740,6 +780,102 @@ function scrubEnd(el, field, ev, cancelled) {
       field.select();
     } catch (err) {}
   }
+}
+
+// ── Перетаскивание строк за ручку (порядок в loras_data = порядок применения) ──
+// Слушатели — только на ручке и строках списка; window/document не трогаем.
+function clearDropMarks(s) {
+  if (!s || !s.list) return;
+  const rows = s.list.children;
+  for (let i = 0; i < rows.length; i++) {
+    setClassFlag(rows[i], "dl-drop-before", false);
+    setClassFlag(rows[i], "dl-drop-after", false);
+  }
+}
+
+function moveEntry(node, from, to) {
+  const s = ensureState(node);
+  if (from === to || from < 0 || from >= s.entries.length) return;
+  if (to < 0 || to > s.entries.length - 1) return;
+  const e = s.entries.splice(from, 1)[0];
+  s.entries.splice(to, 0, e);
+  syncData(node);
+  render(node);
+}
+
+function dragBegin(node, index, grip, ev) {
+  DRAG.node = node;
+  DRAG.from = index;
+  DRAG.to = index;
+  DRAG.grip = grip;
+  if (ev && ev.pointerId !== undefined && typeof grip.setPointerCapture === "function") {
+    try {
+      grip.setPointerCapture(ev.pointerId);
+    } catch (err) {}
+  }
+  const s = ensureState(node);
+  if (s.list && s.list.children[index]) setClassFlag(s.list.children[index], "dl-dragging", true);
+  if (ev) {
+    if (typeof ev.preventDefault === "function") ev.preventDefault();
+    if (typeof ev.stopPropagation === "function") ev.stopPropagation();
+  }
+}
+
+function dragMove(ev) {
+  if (!DRAG.node) return;
+  const s = ensureState(DRAG.node);
+  if (!s.list) return;
+  const clientY = Number(ev && ev.clientY) || 0;
+  const rows = s.list.children;
+  const n = rows.length;
+  clearDropMarks(s);
+  // Найти слот вставки: над какой строкой курсор (верх/низ половины)
+  let slot = n; // по умолчанию — после последней строки
+  for (let i = 0; i < n; i++) {
+    const r = rows[i];
+    const rect = typeof r.getBoundingClientRect === "function" ? r.getBoundingClientRect() : (r._rect || null);
+    const top = rect ? Number(rect.top) || 0 : 0;
+    const h = rect ? Number(rect.height) || 88 : 88;
+    if (clientY < top + h / 2) {
+      slot = i;
+      break;
+    }
+  }
+  // slot — индекс в текущем массиве; перевести в индекс после удаления from
+  let to = slot;
+  if (DRAG.from < slot) to = slot - 1;
+  DRAG.to = to;
+  // Индикатор: если to === from — нет перемещения, индикатор не нужен
+  if (to !== DRAG.from) {
+    if (slot < n) {
+      // Вставка перед строкой slot — линия сверху этой строки
+      setClassFlag(rows[slot], "dl-drop-before", true);
+    } else {
+      // Вставка после последней строки — линия снизу последней
+      if (n > 0) setClassFlag(rows[n - 1], "dl-drop-after", true);
+    }
+  }
+}
+
+function dragEnd(ev, cancelled) {
+  if (!DRAG.node) return;
+  const node = DRAG.node;
+  const from = DRAG.from;
+  const to = DRAG.to;
+  const grip = DRAG.grip;
+  const s = ensureState(node);
+  if (s.list && s.list.children[from]) setClassFlag(s.list.children[from], "dl-dragging", false);
+  clearDropMarks(s);
+  if (grip && ev && ev.pointerId !== undefined && typeof grip.releasePointerCapture === "function") {
+    try {
+      grip.releasePointerCapture(ev.pointerId);
+    } catch (err) {}
+  }
+  DRAG.node = null;
+  DRAG.from = -1;
+  DRAG.to = -1;
+  DRAG.grip = null;
+  if (!cancelled && to !== from) moveEntry(node, from, to);
 }
 
 function closeModal() {
@@ -1184,6 +1320,7 @@ window.DeggLoraLoader = {
   removeAt: removeAt,
   toggleAt: toggleAt,
   toggleAll: toggleAll,
+  moveEntry: moveEntry,
   setStrength: setStrength,
   stepStrength: stepStrength,
   openPicker: openPicker,

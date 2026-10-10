@@ -93,7 +93,7 @@ toggle-all) — JSON-массив. Загрузка: `onConfigure` читает
 ## Фронтенд (JS)
 
 Константы: `HEAD_H=34`, `ROW_H=90`, `LIST_ROWS=3`, `CONTENT_MIN_H=304`,
-`MARGIN=10`, `MIN_W=360`, `STRENGTH_STEP=0.05`, `SCRUB_PX_PER_STEP=10`,
+`MARGIN=10`, `MIN_W=380`, `STRENGTH_STEP=0.05`, `SCRUB_PX_PER_STEP=10`,
 `SCRUB_THRESHOLD=50`; `getMinHeight() = 324` — пол высоты
 (без `getHeight`/`computeSize`).
 
@@ -111,9 +111,21 @@ toggle-all) — JSON-массив. Загрузка: `onConfigure` читает
   не работал. Внешняя L-полоска 10px угловой зоны 15×15 обязана оставаться
   канвасом (живая проба `tests/_probe_live_resize.py`).
   `hideOnZoom: false` (иначе превью исчезает при ds.scale < 0.6), `hideInPanel: true`.
-- Строка: `[toggle aria-checked][thumb 82][name][strength][✕]`.
+- Строка: `[toggle aria-checked][thumb 82][grip][name][strength][✕]`.
   Тумблер и `toggleAll` меняют класс `dl-off`/счётчик на месте; остальные
   мутации перерисовывают список и пишут JSON в `loras_data`.
+  Клик по `name` (`dl-ln`) НЕ открывает карточку — только клик по `thumb` (`dl-thumb`).
+- **Перетаскивание за ручку (grip)**: `pointerdown/pointermove/pointerup/
+  pointercancel` на `.dl-grip` (SVG-6 точек, `cursor:grab`, `touch-action:none`,
+  ширина 22px, hover-подсветка). Ручка — третий ребёнок строки (между thumb и name).
+  `setPointerCapture` на ручке; модульное состояние `DRAG = {node, from, to,
+  grip}`. `dragMove` вычисляет слот по midpoint строк (`_rect`/`getBoundingClientRect`),
+  ставит `.dl-drop-before`/`.dl-drop-after` (inset box-shadow); `dragEnd` вызывает
+  `moveEntry(node, from, to)`, который меняет порядок в `s.entries` = JSON
+  `loras_data` = порядок применения Python. Клик без движения — no-op; `pointercancel`
+  отменяет. Слушатели только на ручке; `window/document` не трогаем.
+  `toggleAt` находит `.dl-sw` через `findByClass(row, "dl-sw")`.
+  `stopPropagation` на pointerdown предотвращает перехват LiteGraph'ом.
 - **Поле силы** — копия нативного виджета Nodes 2.0
   (`ScrubableNumberInput.vue`): пилюля `.dl-num` (высота 24px, radius 6px) с
   кнопками `−`/`+` (`.dl-num-btn`, SVG-иконки lucide minus/plus через

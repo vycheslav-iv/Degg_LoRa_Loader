@@ -183,13 +183,13 @@ if (JS) {
   check("js: applySwitchMode удалён (только Nodes 2.0)", !/applySwitchMode/.test(JSC));
   check("js: без legacy-перепривязки (pointerenter на предке)", !/pointerenter/.test(JSC));
   // Запрет сужен: pointerdown законен ТОЛЬКО как scrub-слой пилюли силы
-  // (нативное поле Nodes 2.0 тянется зажатой ЛКМ). Проверяем получателя, а не
+  // и как grip-слой перетаскивания строки. Проверяем получателя, а не
   // само имя события: слушатели обязаны висеть на своём слое, не на
   // window/document (те запрещены отдельными проверками).
   (() => {
     const hits = [...JSC.matchAll(/([\w$.]+)\.addEventListener\("pointer(\w+)"/g)];
-    return check("js: события указателя — только на scrub-слое (.dl-num-scrub)",
-      hits.length >= 3 && hits.every((m) => /scrub/i.test(m[1])),
+    return check("js: события указателя — только на scrub/grip-слое",
+      hits.length >= 3 && hits.every((m) => /scrub|grip/i.test(m[1])),
       JSON.stringify(hits.map((m) => m[1] + "." + m[2])));
   })();
   has(JSC, /\.dl-num-scrub\{[^}]*cursor:ew-resize/, "js: курсор scrub-слоя ←→ (cursor:ew-resize)");
@@ -207,6 +207,17 @@ if (JS) {
   check("js: тяга меняет значение через stepStrength (один путь для кнопок и мыши)",
     /stepStrength\(\s*SCRUB\.node\s*,\s*SCRUB\.index\s*,/.test(JSC));
   check("js: без классов dl-mode-v2/dl-mode-legacy", !/dl-mode-(v2|legacy)/.test(JSC));
+  has(JSC, /\.dl-grip\{/, "js: css — .dl-grip существует");
+  has(JSC, /\.dl-row\.dl-dragging\{/, "js: css — .dl-row.dl-dragging (перетаскиваемая строка полупрозрачна)");
+  has(JSC, /\.dl-row\.dl-drop-before\{/, "js: css — .dl-row.dl-drop-before (индикатор перед строкой)");
+  has(JSC, /\.dl-row\.dl-drop-after\{/, "js: css — .dl-row.dl-drop-after (индикатор после строки)");
+  check("js: moveEntry экспортирован в window.DeggLoraLoader", /moveEntry: moveEntry/.test(JSC));
+  check("js: MIN_W = 380 (запас на грип 14px + gap 8px)", /MIN_W\s*=\s*380/.test(JSC));
+  check("js: ключ reorder в обоих языках", /reorder: "Перетащить для изменения порядка"/.test(JSC) && /reorder: "Drag to reorder"/.test(JSC));
+  check("js: toggleAt ищет .dl-sw через findByClass (grip — первый ребёнок строки)",
+    /findByClass\(row,\s*"dl-sw"\)/.test(JSC));
+  check("js: глобальных слушателей document/window нет (DnD тоже)",
+    !/document\.addEventListener\(/.test(JSC) && !/window\.addEventListener\(/.test(JSC));
   has(JSC, /overflow-x:\s*hidden/, "js: overflow-x:hidden у списка");
   check("js: «+ LoRA» не в шапке (head.appendChild(addBtn) запрещён)",
     !/head\.appendChild\(addBtn\)/.test(JSC));

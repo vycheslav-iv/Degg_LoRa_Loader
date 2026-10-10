@@ -10,7 +10,7 @@
 //   • корень пола: height:100%, min-height, display:flex, flex-direction:column,
 //     overflow:hidden (скил comfyui-dom-widget-sizing);
 //   • DOM-структура: head (toggle-all слева / счётчик) + список строк
-//     [toggle][thumb 82][name][strength][✕] + foot «+ LoRA» внизу;
+//     [toggle][thumb 82][grip][name][strength][✕] + foot «+ LoRA» внизу;
 //   • переключатели: dl-knob (только Nodes 2.0, legacy-режимы удалены);
 //   • MIN_W: нода расширена до MIN_W при создании и при onConfigure;
 //   • персистентность: onConfigure читает widgets_values_named → positional
@@ -108,6 +108,9 @@ class FakeEl {
   }
   get firstChild() {
     return this.children[0] || null;
+  }
+  getBoundingClientRect() {
+    return this._rect || { top: 0, bottom: 0, left: 0, right: 0, width: 0, height: 0 };
   }
   appendChild(child) {
     if (child.parentNode) child.parentNode.removeChild(child);
@@ -609,7 +612,7 @@ check("превью: ленивая загрузка (loading=lazy)",
   JSON.stringify(findAll(root, (e) => e.tagName === "IMG").map((e) => e.loading)));
 const sw0 = byClass(row0, "dl-sw");
 check("toggle: dl-knob внутри переключателя", !!(sw0 && byClass(sw0, "dl-knob")));
-check("toggle: переключатель остаётся первым ребёнком строки", row0.children[0] === sw0,
+check("toggle: переключатель первый, ручка — третья (после превью)", row0.children[0] === sw0 && row0.children[2] !== sw0,
   JSON.stringify(row0.children.map((e) => e.className)));
 check("img: error-обработчик прячет битую картинку", (() => {
   thumbImg.dispatch("error");
@@ -649,23 +652,20 @@ check("T2: экспорты openLoraCard/openPreviewPicker/uploadPreview ест�
 DL.closeModal();
 byClass(row0, "dl-ln").dispatch("click");
 await flush();
-const cardByName = documentStub.body.children[documentStub.body.children.length - 1];
-check("T2: клик по имени открывает карточку LoRA (одна модалка)", (() => {
-  const m = documentStub.body.children[documentStub.body.children.length - 1];
-  return documentStub.body.children.length === 1 && !!m && !!byClass(m, "dl-ppick");
-})(), String(documentStub.body.children.length));
-check("T2: карточка по имени показывает имя из /info",
-  !!findEl(documentStub.body, (e) => e.textContent === "054 - Fused Glass"));
-check("T2: карточка по имени содержит сетку кандидатов превью",
-  !!cardByName && findAll(cardByName, (e) => String(e.className).includes("dl-pcand")).length >= 1,
-  cardByName ? String(findAll(cardByName, (e) => String(e.className).includes("dl-pcand")).length) : "нет модалки");
-DL.closeModal();
+check("T2: клик по имени НЕ открывает карточку (только превью)",
+  documentStub.body.children.length === 0,
+  String(documentStub.body.children.length));
 byClass(row0, "dl-thumb").dispatch("click");
 await flush();
 const ppModal = documentStub.body.children[documentStub.body.children.length - 1];
-check("T2: клик по превью открывает ТУ ЖЕ карточку LoRA (одна модалка, без отдельной инфо)",
+check("T2: клик по превью открывает карточку LoRA (одна модалка, без отдельной инфо)",
   !!ppModal && !!byClass(ppModal, "dl-ppick") && documentStub.body.children.length === 1,
   ppModal ? String(ppModal.children.map((e) => e.className)) : "нет модалки");
+check("T2: карточка по превью показывает имя из /info",
+  !!findEl(documentStub.body, (e) => e.textContent === "054 - Fused Glass"));
+check("T2: карточка по превью содержит сетку кандидатов превью",
+  !!ppModal && findAll(ppModal, (e) => String(e.className).includes("dl-pcand")).length >= 1,
+  ppModal ? String(findAll(ppModal, (e) => String(e.className).includes("dl-pcand")).length) : "нет модалки");
 check("T2: карточка из превью содержит детали /info (baseModel)",
   !!findEl(ppModal, (e) => e.textContent === "Krea 2"),
   "нет baseModel в карточке");
@@ -776,7 +776,7 @@ DL.toggleAt(node, 0);
 check("toggleAt: on переключился", json(dataW)[0].on === !before);
 check("toggleAt: строка получила dl-off", String(listEl.children[0].className).includes("dl-off"));
 check("toggleAt: счётчик 0/2", countEl.textContent === "0/2", countEl.textContent);
-check("toggleAt: aria-checked", listEl.children[0].children[0]["aria-checked"] === "false");
+check("toggleAt: aria-checked", byClass(listEl.children[0], "dl-sw")["aria-checked"] === "false");
 check("toggleAt: мастер-переключатель выключен (не все вкл)",
   allSw.getAttribute("aria-checked") === "false", allSw.getAttribute("aria-checked"));
 DL.toggleAt(node, 0);
@@ -901,6 +901,100 @@ if (scrubEl) {
     field._focused === false && !String(scrubEl.className).includes("dl-scrub-edit"),
     `focused=${field._focused} class=${scrubEl.className}`);
   DL.setStrength(node, 1, "1");
+}
+
+// ── DnD: перетаскивание строк за ручку (порядок в loras_data = порядок применения) ──
+check("DnD: moveEntry экспортирован", typeof DL.moveEntry === "function", String(typeof DL.moveEntry));
+{
+  const grips = listEl.children.map((r) => byClass(r, "dl-grip"));
+  check("DnD: у каждой строки есть ручка .dl-grip", grips.every((g) => !!g),
+    JSON.stringify(listEl.children.map((r) => r.children.map((c) => c.className))));
+  check("DnD: ручка — третья в строке (после превью)", !!(grips[0] && listEl.children[0].children[2] === grips[0]),
+    JSON.stringify(listEl.children[0] ? listEl.children[0].children.map((c) => c.className) : []));
+  check("DnD: подсказка ручки = локализованный reorder", (() => {
+    const ttl = grips[0] && grips[0].title;
+    return ttl === DL.LOCALES.en.reorder || ttl === DL.LOCALES.ru.reorder;
+  })(), grips[0] ? JSON.stringify(grips[0].title) : "нет ручки");
+  check("DnD: ручка слушает pointerdown (как scrub) для drag-старта", (() => {
+    const g = grips[0];
+    return !!g && g.listeners("pointerdown").length === 1;
+  })(), grips[0] ? JSON.stringify(grips[0].listeners("pointerdown").length) : "нет ручки");
+  check("DnD: ручка слушает pointermove/pointerup/pointercancel", (() => {
+    const g = grips[0];
+    return !!g && g.listeners("pointermove").length === 1 && g.listeners("pointerup").length === 1 && g.listeners("pointercancel").length === 1;
+  })(), grips[0] ? JSON.stringify(["pointermove", "pointerup", "pointercancel"].map((t) => t + "=" + grips[0].listeners(t).length)) : "нет ручки");
+  // moveEntry напрямую
+  const order0 = json(dataW).map((e) => e.lora);
+  check("DnD: порядок до = [a, sub/c]", JSON.stringify(order0) === JSON.stringify(["a.safetensors", "sub/c.safetensors"]),
+    JSON.stringify(order0));
+  if (typeof DL.moveEntry === "function") {
+    DL.moveEntry(node, 1, 0);
+    const order1 = json(dataW).map((e) => e.lora);
+    check("DnD: moveEntry(1→0): loras_data = [sub/c, a]",
+      JSON.stringify(order1) === JSON.stringify(["sub/c.safetensors", "a.safetensors"]), JSON.stringify(order1));
+    check("DnD: moveEntry(1→0): DOM перестроен в новом порядке",
+      listEl.children[0] && listEl.children[0].title === "sub/c.safetensors",
+      listEl.children[0] ? listEl.children[0].title : "нет строки");
+    DL.moveEntry(node, 0, 1);
+    const order2 = json(dataW).map((e) => e.lora);
+    check("DnD: moveEntry(0→1): вернулись обратно", JSON.stringify(order2) === JSON.stringify(order0),
+      JSON.stringify(order2));
+  }
+  // Симуляция pointer-based DnD: pointerdown на ручке → pointermove → pointerup
+  if (grips[0]) {
+    listEl.children[0]._rect = { top: 0, bottom: 88, height: 88 };
+    listEl.children[1]._rect = { top: 88, bottom: 176, height: 88 };
+    const g0 = grips[0];
+    g0.dispatch("pointerdown", { clientY: 10, pointerId: 21 });
+    check("DnD: pointerdown на ручке пометил строку dl-dragging",
+      String(listEl.children[0].className).includes("dl-dragging"),
+      String(listEl.children[0].className));
+    g0.dispatch("pointermove", { clientY: 150, pointerId: 21 });
+    check("DnD: pointermove в нижней половине строки 1 → индикатор dl-drop-after",
+      /dl-drop-after/.test(String(listEl.children[1].className)),
+      String(listEl.children[1].className));
+    g0.dispatch("pointerup", { clientY: 150, pointerId: 21 });
+    const orderDrag = json(dataW).map((e) => e.lora);
+    check("DnD: pointerup изменил порядок в loras_data",
+      JSON.stringify(orderDrag) !== JSON.stringify(order0), JSON.stringify(orderDrag));
+    check("DnD: индикаторы сняты после pointerup",
+      !/dl-drop-/.test(String(listEl.children[1].className)),
+      String(listEl.children[1].className));
+    // Отмена: pointercancel → порядок не меняется
+    const orderBeforeCancel = JSON.stringify(json(dataW).map((e) => e.lora));
+    if (listEl.children[0]) {
+      const gNew = byClass(listEl.children[0], "dl-grip");
+      listEl.children[0]._rect = { top: 0, bottom: 88, height: 88 };
+      listEl.children[1]._rect = { top: 88, bottom: 176, height: 88 };
+      if (gNew) {
+        gNew.dispatch("pointerdown", { clientY: 10, pointerId: 22 });
+        gNew.dispatch("pointermove", { clientY: 150, pointerId: 22 });
+        gNew.dispatch("pointercancel", { clientY: 150, pointerId: 22 });
+        check("DnD: pointercancel → порядок не изменился",
+          JSON.stringify(json(dataW).map((e) => e.lora)) === orderBeforeCancel,
+          JSON.stringify(json(dataW).map((e) => e.lora)));
+      }
+    }
+    // Клик без движения: pointerdown + pointerup → порядок не меняется
+    const orderBeforeClick = JSON.stringify(json(dataW).map((e) => e.lora));
+    if (listEl.children[0]) {
+      const gClick = byClass(listEl.children[0], "dl-grip");
+      if (gClick) {
+        gClick.dispatch("pointerdown", { clientY: 40, pointerId: 23 });
+        gClick.dispatch("pointerup", { clientY: 40, pointerId: 23 });
+        check("DnD: клик без движения не меняет порядок",
+          JSON.stringify(json(dataW).map((e) => e.lora)) === orderBeforeClick,
+          JSON.stringify(json(dataW).map((e) => e.lora)));
+      }
+    }
+    // Привести список к 2 строкам [a, sub/c] для следующих секций
+    if (json(dataW) && json(dataW).length === 2 && typeof DL.moveEntry === "function") {
+      const cur = json(dataW).map((e) => e.lora);
+      if (cur[0] !== "a.safetensors") DL.moveEntry(node, 0, 1);
+    }
+  }
+  check("DnD: глобальных слушателей нет", windowAdds === 0 && documentAdds === 0,
+    `window=${windowAdds} document=${documentAdds}`);
 }
 
 // ── локальный формат числа (как нативный виджет) ───────────────────────
