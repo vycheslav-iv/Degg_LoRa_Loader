@@ -57,6 +57,8 @@ const CSS_TEXT = [
   ".dl-modal{position:fixed;inset:0;z-index:1200;background:rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center;}",
   ".dl-picker,.dl-info{position:relative;max-width:560px;width:90%;max-height:80vh;overflow-y:auto;background:#232323;border:1px solid #4a4a4a;border-radius:8px;padding:14px;}",
   ".dl-title{font-weight:bold;margin-bottom:8px;}",
+  ".dl-search{width:100%;height:32px;margin-bottom:8px;padding:0 10px;border:1px solid #4a4a4a;border-radius:4px;background:#1a1a1a;color:#eee;font:inherit;outline:none;box-sizing:border-box;}",
+  ".dl-search:focus{border-color:#6a9ef0;}",
   ".dl-x{position:absolute;top:8px;right:8px;width:26px;height:26px;border:1px solid #5a5a5a;border-radius:4px;background:#2a2a2a;color:#eee;}",
   ".dl-items{display:flex;flex-direction:column;gap:4px;}",
   ".dl-pitem{display:flex;align-items:center;gap:8px;padding:6px;border:1px solid #3a3a3a;border-radius:4px;cursor:pointer;background:#1f1f1f;}",
@@ -104,6 +106,7 @@ const LOCALES = {
     all: "Все вкл/выкл",
     empty: "Нет LoRA — нажмите + Лора",
     pickTitle: "Выбор LoRA",
+    searchPlaceholder: "Поиск по названию…",
     emptyCatalog: "Список LoRA пуст",
     infoTitle: "Информация о LoRA",
     base: "Базовая модель",
@@ -123,6 +126,7 @@ const LOCALES = {
     all: "Toggle all",
     empty: "No LoRAs — press + LoRA",
     pickTitle: "Pick a LoRA",
+    searchPlaceholder: "Search by name…",
     emptyCatalog: "No LoRAs found",
     infoTitle: "LoRA details",
     base: "Base model",
@@ -904,6 +908,11 @@ function openPicker(node) {
   closeBtn.addEventListener("click", closeModal);
   box.appendChild(title);
   box.appendChild(closeBtn);
+  const search = mk("input", "dl-search");
+  search.type = "text";
+  search.placeholder = t("searchPlaceholder");
+  search.setAttribute("autocomplete", "off");
+  box.appendChild(search);
   const items = mk("div", "dl-items");
   if (Array.isArray(CATALOG) && CATALOG.length) {
     const s = ensureState(node);
@@ -924,6 +933,7 @@ function openPicker(node) {
         return e.lora === cat.name;
       });
       const item = mk("div", used ? "dl-pitem dl-used" : "dl-pitem");
+      item.setAttribute("data-name", cat.name.toLowerCase());
       let entry = null;
       for (const e2 of s.entries) {
         if (e2.lora === cat.name) {
@@ -945,8 +955,17 @@ function openPicker(node) {
       })(cat.name);
       items.appendChild(item);
     }
+    search.addEventListener("input", function () {
+      const q = search.value.trim().toLowerCase();
+      const rows = items.children;
+      for (let i = 0; i < rows.length; i++) {
+        const nm = rows[i].getAttribute("data-name") || "";
+        rows[i].style.display = !q || nm.indexOf(q) !== -1 ? "" : "none";
+      }
+    });
   } else {
     loadCatalog();
+    search.style.display = "none";
     const empty = mk("div", "dl-empty");
     empty.textContent = t("emptyCatalog");
     items.appendChild(empty);

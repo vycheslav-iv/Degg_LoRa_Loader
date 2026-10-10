@@ -260,6 +260,11 @@ if (JS) {
   has(JSC, /rootMargin/, "js: rootMargin у IntersectionObserver (подгрузка на подходе)");
   has(JSC, /\.dl-pt\{/, "js: контейнер превью пикера .dl-pt");
 
+  // Поиск в пикере
+  has(JSC, /dl-search/, "js: поле поиска .dl-search в пикере");
+  has(JSC, /searchPlaceholder/, "js: локализованный placeholder поиска");
+  has(JSC, /data-name/, "js: data-name для фильтрации поиска");
+
   // Имя строки: серый baseModel + белое имя Civitai (T7)
   has(JSC, /dl-bm/, "js: серый baseModel строки .dl-bm");
   has(JSC, /dl-ln/, "js: белое имя Civitai строки .dl-ln");

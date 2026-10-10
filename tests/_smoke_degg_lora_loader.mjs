@@ -1112,6 +1112,27 @@ check("openPicker: уже добавленная помечена", (() => {
 })());
 check("openPicker: глобальных слушателей нет", windowAdds === 0 && documentAdds === 0,
   `window=${windowAdds} document=${documentAdds}`);
+const searchInput = byClass(modal, "dl-search");
+check("openPicker: поле поиска присутствует", !!searchInput && searchInput.tagName === "INPUT",
+  searchInput ? searchInput.tagName : "нет поля");
+check("openPicker: placeholder поиска локализован", !!searchInput
+  && (searchInput.placeholder === DL.LOCALES.en.searchPlaceholder
+    || searchInput.placeholder === DL.LOCALES.ru.searchPlaceholder),
+  searchInput ? JSON.stringify(searchInput.placeholder) : "нет placeholder");
+if (searchInput) {
+  const pItems = findAll(modal, (e) => String(e.className).includes("dl-pitem"));
+  const beforeCount = pItems.filter((e) => e.style.display !== "none").length;
+  searchInput.value = "b.";
+  searchInput.dispatch("input");
+  const afterCount = pItems.filter((e) => e.style.display !== "none").length;
+  check("openPicker: поиск 'b.' фильтрует список", afterCount < beforeCount && afterCount >= 1,
+    `before=${beforeCount} after=${afterCount}`);
+  searchInput.value = "";
+  searchInput.dispatch("input");
+  const resetCount = pItems.filter((e) => e.style.display !== "none").length;
+  check("openPicker: очистка поиска восстанавливает список", resetCount === beforeCount,
+    `before=${beforeCount} reset=${resetCount}`);
+}
 await flush();
 const itemsNow = findAll(modal, (e) => String(e.className).includes("dl-pitem"));
 check("picker: хост превью — контейнер .dl-pt", !!itemsNow.find((e) => !!byClass(e, "dl-pt")),
