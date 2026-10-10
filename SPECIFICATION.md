@@ -1,8 +1,8 @@
 # SPECIFICATION — Degg_LoRa_Loader (Degg LoRa Loader)
 
 Нода применяет список LoRA (JSON) к цепочкам MODEL/CLIP. Список редактируется в
-UI-списке прямо на ноде: превью с CivitAI, диалог информации о LoRA, общий
-тумблер, добавление из каталога, локализация RU/EN.
+UI-списке прямо на ноде: превью с CivitAI, единая карточка LoRA (детали + выбор
+превью), общий тумблер, добавление из каталога, локализация RU/EN.
 
 ## Состав
 
@@ -75,10 +75,27 @@ toggle-all) — JSON-массив. Загрузка: `onConfigure` читает
 `10c.3` `refresh=1` → HTTP=1. TTL отклонён как флейки — seen-set живёт
 только внутри одного вызова роута.
 
+### Ссылка на страницу LoRA (CivitAI)
+
+`model-versions/by-hash/` поля `permalink` **не отдаёт** (проверено сырым
+ответом: ключи `[… id, modelId …]`, `permalink` отсутствует), поэтому
+`_normalize_civitai` строит ссылку сам через `civitai_page_url(modelId, id)`:
+`https://civitai.com/models/{modelId}?modelVersionId={id}` (без `id` — только
+`/models/{modelId}`; без `modelId` — `None`). `permalink` из ответа, если
+когда-нибудь появится, имеет приоритет. Живая проверка: для реальной лоры ссылка
+открывается 200 и ведёт на её страницу.
+
+Файл кэша версионирован (`CACHE_VERSION = "v2"`, `<sha256 имени>.v2.json`):
+старые записи без ссылки **не** переиспользуются — иначе у уже закэшированных
+лор ссылка не появилась бы. Старые файлы можно удалить вручную из
+`user/default/degg_lora_cache/`.
+
 ## Фронтенд (JS)
 
 Константы: `HEAD_H=34`, `ROW_H=90`, `LIST_ROWS=3`, `CONTENT_MIN_H=304`,
-`MARGIN=10`; `getMinHeight() = 324` — пол высоты (без `getHeight`/`computeSize`).
+`MARGIN=10`, `MIN_W=360`, `STRENGTH_STEP=0.05`, `SCRUB_PX_PER_STEP=10`,
+`SCRUB_THRESHOLD=50`; `getMinHeight() = 324` — пол высоты
+(без `getHeight`/`computeSize`).
 
 - Импорт: `window.comfyAPI.app.app`; регистрация через
   `app.registerExtension({name: "Degg.LoraLoader", beforeRegisterNodeDef})`,
@@ -87,20 +104,58 @@ toggle-all) — JSON-массив. Загрузка: `onConfigure` читает
 - Корень пола: inline `height:100%; min-height:304px; display:flex;
   flex-direction:column; overflow:hidden` + `.dl-list{flex:1; overflow-y:auto}`.
   `hideOnZoom: false` (иначе превью исчезает при ds.scale < 0.6), `hideInPanel: true`.
-- Строка: `[toggle aria-checked][thumb 82][name][num input][✕]`.
+- Строка: `[toggle aria-checked][thumb 82][name][strength][✕]`.
   Тумблер и `toggleAll` меняют класс `dl-off`/счётчик на месте; остальные
   мутации перерисовывают список и пишут JSON в `loras_data`.
+- **Поле силы** — копия нативного виджета Nodes 2.0
+  (`ScrubableNumberInput.vue`): пилюля `.dl-num` (высота 24px, radius 6px) с
+  кнопками `−`/`+` (`.dl-num-btn`, SVG-иконки lucide minus/plus через
+  `createElementNS`) и полем `.dl-num-input` по центру; фон/текст — токены темы
+  `--component-node-widget-background` / `--component-node-foreground` (+`-hovered`),
+  чтобы виджет совпадал с остальными виджетами фронтенда. Кнопки шагают на
+  `STRENGTH_STEP=0.05` (`stepStrength`), кламп ±100 и округление до 4 знаков —
+  без float-мусора. Значение показывается как нативное: `Intl.NumberFormat`
+  по текущему языку (в RU — «3,52»), а ввод принимает и запятую, и точку
+  (`normalizeNumberText`); при смене языка `refreshLabels` переформатирует число.
+- **Ручная тяга по значению (scrub)** — как у нативного поля силы: поле накрыто
+  прозрачным слоем `.dl-num-scrub` (внутри `.dl-num-mid`) с курсором ←→
+  (`cursor:ew-resize`, `touch-action:pan-y`). Зажатая ЛКМ тянет значение:
+  `SCRUB_PX_PER_STEP=10` — один шаг силы на каждые 10px, **вправо — больше**
+  (нативное `usePointerSwipe.distanceX = posStart.x − posEnd.x`, а значение
+  считается как `value − delta·step`). Отпускание после пути ≥ `SCRUB_THRESHOLD=50px`
+  — это тяга, ручной ввод не открывается; клик без движения, наоборот, прячет
+  слой (класс `dl-scrub-edit` → `display:none`), ставит фокус в поле и выделяет
+  текст под замену (`select()`), слой возвращается по `blur`; `pointercancel`
+  (жест забрал браузер), как и у нативного поля, ручной ввод не открывает.
+  Обработчики
+  (`scrubBegin`/`scrubDrag`/`scrubEnd`) висят **только на своём слое** и берут
+  `setPointerCapture`, поэтому тяга продолжается и за пределами пилюли;
+  глобальные `window`/`document` слушатели по-прежнему запрещены. Тяга меняет
+  значение тем же `stepStrength`, что и кнопки «−»/«+» (кламп и округление
+  общие).
 - Состояние — `node._dl` (+ `node._dlReady`); глобальных слушателей нет
   (window/document.addEventListener запрещены тестом), `setTimeout`/rAF не
   используются.
-- Модалки (picker/info) — элементы на `document.body`, закрытие кнопкой/бэкдропом,
-  без глобальных keydown/Escape.
+- **Карточка LoRA** (единая): клик и по превью, и по имени открывает одну и ту
+  же модалку `openLoraCard` — вверху детали (`.dl-details`: имя-ссылка
+  `a.dl-iname` — **единственная** ссылка на страницу LoRA, с `title`-подсказкой
+  «Открыть на CivitAI» и подчёркиванием по hover, чтобы кликабельность была
+  видна; отдельной строки-ссылки НЕТ (убиралась как дубль), и она появляется
+  только при наличии `permalink` из `/info`; далее `baseModel`, триггеры,
+  описание), ниже сетка кандидатов превью `.dl-pgrid > .dl-pcand`
+  (локальное превью, своё, картинки CivitAI) + `Загрузить`/`Сбросить`.
+  `openPreviewPicker` — алиас `openLoraCard`; `openInfo(node, name)` открывает
+  ту же карточку по имени, а для лоры вне списка — детали без сетки (`index < 0`).
+  Один `fetchInfo` на карточку: детали и кандидаты из CivitAI рендерятся вместе.
+- Модалки (каталог «+ LoRA» и карточка LoRA) — элементы на `document.body`,
+  закрытие кнопкой/бэкдропом, без глобальных keydown/Escape.
 - Локализация: словари `LOCALES.ru/.en` (одинаковые ключи; EN без кириллицы),
   `t(key)` — единственная точка перевода, язык из `Comfy.Locale`
   (`extensionManager.setting.get` → `getSettingValue`), `setLocaleOverride` —
   ручной переключатель (тесты). Подписи обновляет `refreshLabels`.
-- `/degg_lora_loader/img` используется и в строках, и в picker; `/info` — только
-  по клику на превью (sha256 дорогой, каталог его не дёргает).
+- `/degg_lora_loader/img` используется и в строках, и в каталоге, и в карточке;
+  `/info` — строкой (для имени/baseModel и сайт-превью) и карточкой (детали +
+  кандидаты). Шелл-запрос `sha256` дорогой, но кэшируется `INFO_MEM`/диском.
 
 ## Проверки
 
@@ -108,7 +163,9 @@ toggle-all) — JSON-массив. Загрузка: `onConfigure` читает
 python _process/check.py Degg_LoRa_Loader
 ```
 
-Три проверки из `check.json`: Python-песочница, JS-смоук (vm-заглушки DOM/fetch),
-статический аудит (Python ↔ JS ↔ locales ↔ check.json + запрещённые приёмы
-AGENTS.md §4.1/§5). Каждый пункт задачи должен иметь красную версию до правки
-(скил `comfyui-task-acceptance`); приёмка — мутацией (скил `comfyui-mutation-testing`).
+Три проверки из `check.json`: Python-песочница, JS-смоук (vm-заглушки DOM/fetch;
+включая поведенческие проверки поля силы — шаг 0.05, формат числа, тяга по
+значению и клик в ручной ввод), статический аудит (Python ↔ JS ↔ locales ↔
+check.json + запрещённые приёмы AGENTS.md §4.1/§5). Каждый пункт задачи должен
+иметь красную версию до правки (скил `comfyui-task-acceptance`); приёмка —
+мутацией (скил `comfyui-mutation-testing`).

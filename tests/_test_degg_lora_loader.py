@@ -358,6 +358,25 @@ check("_normalize_civitai: html из description вычищен", ci.get("descri
       str(ci.get("description")))
 check("_normalize_civitai: fileUrl", ci.get("fileUrl") == "https://x/y.safetensors")
 check("_normalize_civitai: permalink", ci.get("permalink") == "https://civitai.com/models/1")
+# Живой CivitAI `model-versions/by-hash` НЕ отдаёт permalink (проверено сырым ответом:
+# ключи [... id, modelId ...], permalink отсутствует). Страница строится из modelId/id.
+raw_no_permalink = {
+    "id": 3111233,
+    "modelId": 2764310,
+    "model": {"name": "Warm Light Slider", "type": "LORA"},
+    "baseModel": "Krea 2",
+    "trainedWords": [],
+}
+ci_noperm = node._normalize_civitai(raw_no_permalink, "warm.safetensors")
+check("_normalize_civitai: нет permalink в ответе → ссылка из modelId/id",
+      ci_noperm.get("permalink") == "https://civitai.com/models/2764310?modelVersionId=3111233",
+      str(ci_noperm.get("permalink")))
+check("_normalize_civitai: без modelId → permalink None (ссылки нет)",
+      node._normalize_civitai({"model": {"name": "x"}}, "x.safetensors").get("permalink") is None)
+check("_normalize_civitai: без id версии → ссылка только на модель",
+      node._normalize_civitai({"modelId": 2764310}, "x.safetensors").get("permalink")
+      == "https://civitai.com/models/2764310",
+      str(node._normalize_civitai({"modelId": 2764310}, "x.safetensors").get("permalink")))
 check("_normalize_civitai: images перенесены", bool(ci.get("images")))
 check("_normalize_civitai: нет изображений → images = []",
       node._normalize_civitai({"model": {"name": "x"}}, "x.safetensors").get("images") == [])
@@ -401,6 +420,25 @@ try:
           cache_dir.is_dir() and any(cache_dir.iterdir()), str(list(TMP.glob("**/*"))))
 finally:
     node._http_get_json = orig_http
+
+# Кэш СТАРОГО формата (записанный до появления ссылки) не должен переиспользоваться,
+# иначе у уже закэшированных лор ссылка на CivitAI так и не появится.
+import hashlib  # noqa: E402
+
+_stale_dir = TMP / "user" / "default" / "degg_lora_cache"
+_stale_dir.mkdir(parents=True, exist_ok=True)
+_stale_key = hashlib.sha256("b.safetensors".encode("utf-8")).hexdigest()
+(_stale_dir / (_stale_key + ".json")).write_text(
+    json.dumps({"ok": True, "name": "STALE", "permalink": None}), encoding="utf-8")
+HTTP_CALLS.clear()
+node._http_get_json = fake_http
+try:
+    fresh = node.get_lora_info("b.safetensors")
+finally:
+    node._http_get_json = orig_http
+check("get_lora_info: старый кэш без ссылки не переиспользуется (формат версионирован)",
+      len(HTTP_CALLS) == 1 and bool(fresh) and fresh.get("name") != "STALE",
+      f"http={len(HTTP_CALLS)} fresh={fresh and fresh.get('name')}")
 
 check("get_lora_info: неизвестный файл → None", node.get_lora_info("nope.safetensors") is None)
 check("get_lora_info: кривое имя → None", node.get_lora_info("../x.safetensors") is None)

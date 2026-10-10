@@ -181,8 +181,31 @@ if (JS) {
   has(JSC, /\.dl-foot/, "js: футер «+ LoRA» под списком");
   has(JSC, /dl-knob/, "js: knob переключателя (Switch.vue-style)");
   check("js: applySwitchMode удалён (только Nodes 2.0)", !/applySwitchMode/.test(JSC));
-  check("js: без legacy-слушателей pointerenter/pointerdown",
-    !/pointerenter/.test(JSC) && !/pointerdown/.test(JSC));
+  check("js: без legacy-перепривязки (pointerenter на предке)", !/pointerenter/.test(JSC));
+  // Запрет сужен: pointerdown законен ТОЛЬКО как scrub-слой пилюли силы
+  // (нативное поле Nodes 2.0 тянется зажатой ЛКМ). Проверяем получателя, а не
+  // само имя события: слушатели обязаны висеть на своём слое, не на
+  // window/document (те запрещены отдельными проверками).
+  (() => {
+    const hits = [...JSC.matchAll(/([\w$.]+)\.addEventListener\("pointer(\w+)"/g)];
+    return check("js: события указателя — только на scrub-слое (.dl-num-scrub)",
+      hits.length >= 3 && hits.every((m) => /scrub/i.test(m[1])),
+      JSON.stringify(hits.map((m) => m[1] + "." + m[2])));
+  })();
+  has(JSC, /\.dl-num-scrub\{[^}]*cursor:ew-resize/, "js: курсор scrub-слоя ←→ (cursor:ew-resize)");
+  has(JSC, /\.dl-num-scrub\{[^}]*position:absolute/, "js: scrub-слой лежит поверх поля (position:absolute)");
+  has(JSC, /\.dl-num-scrub\{[^}]*touch-action:pan-y/, "js: touch-action:pan-y у scrub-слоя (как native)");
+  has(JSC, /\.dl-num-scrub\.dl-scrub-edit\{[^}]*display:none/,
+    "js: css — .dl-scrub-edit реально прячет scrub-слой (display:none)");
+  check("js: класс .dl-scrub-edit и ставится, и снимается",
+    /setClassFlag\([^)]*"dl-scrub-edit",\s*true\)/.test(JSC)
+    && /setClassFlag\([^)]*"dl-scrub-edit",\s*false\)/.test(JSC));
+  check("js: ручная тяга — 10px на шаг (как native)",
+    /SCRUB_PX_PER_STEP\s*=\s*10/.test(JSC));
+  check("js: порог «тяга или клик» = 50px (как native isSwiping)",
+    /SCRUB_THRESHOLD\s*=\s*50/.test(JSC));
+  check("js: тяга меняет значение через stepStrength (один путь для кнопок и мыши)",
+    /stepStrength\(\s*SCRUB\.node\s*,\s*SCRUB\.index\s*,/.test(JSC));
   check("js: без классов dl-mode-v2/dl-mode-legacy", !/dl-mode-(v2|legacy)/.test(JSC));
   has(JSC, /overflow-x:\s*hidden/, "js: overflow-x:hidden у списка");
   check("js: «+ LoRA» не в шапке (head.appendChild(addBtn) запрещён)",
@@ -193,6 +216,15 @@ if (JS) {
   has(JSC, /dl-alllabel/, "js: подпись мастер-переключателя .dl-alllabel");
   has(JSC, /dl-all.*dl-sw|dl-sw.*dl-all/, "js: мастер-переключатель использует стили .dl-sw");
   has(JSC, /\.dl-img\{[^}]*object-fit:\s*cover/, "js: превью .dl-img обрезается по центру (object-fit:cover)");
+  // Поле силы — как нативный виджет Nodes 2.0 (ScrubableNumberInput.vue):
+  // пилюля на токенах темы, кнопки «−»/«+» с SVG-иконками, локальный формат числа.
+  has(JSC, /--component-node-widget-background/, "js: поле силы на токенах темы Nodes 2.0");
+  has(JSC, /dl-num-btn/, "js: поле силы — пилюля с кнопками «−»/«+» (dl-num-btn)");
+  has(JSC, /lucideIcon\(/, "js: иконки степпера — SVG lucide minus/plus");
+  check("js: сила форматируется через Intl.NumberFormat (как нативное поле)",
+    /Intl\.NumberFormat/.test(JSC));
+  check("js: шаг степпера силы = 0.05 (STRENGTH_STEP)",
+    /STRENGTH_STEP\s*=\s*0\.05/.test(JSC));
   check("js: корзина без hover-правил", !/dl-row:hover\s+\.dl-del/.test(JSC));
   check("js: корзина всегда видна (без opacity:0)", !/\.dl-del\{[^}]*opacity:\s*0/.test(JSC));
   has(JSC, /createElementNS/, "js: иконка корзины через createElementNS (SVG)");
@@ -228,7 +260,8 @@ if (JS) {
   has(JSC, /\/view\?/, "js: показ загруженного через /view");
   has(JSC, /new FormData\(/, "js: FormData для аплоада");
   has(JSC, /dl-path/, "js: полный путь в шапке карточки пикера");
-  has(JSC, /dl-link/, "js: permalink Civitai в карточке пикера");
+  has(JSC, /mk\("a", "dl-iname"\)/, "js: имя LoRA — ссылка на CivitAI (a.dl-iname)");
+  check("js: НЕТ отдельной строки-ссылки dl-link (ссылка — само имя)", !/dl-link/.test(JSC));
   (() => {
     const m = JSC.match(/\.dl-pcand\{[^}]*width:(\d+)px/);
     return check("js: кандидаты превью не меньше 120px (.dl-pcand width)", !!m && Number(m[1]) >= 120, m ? m[1] + "px" : "не найдено");

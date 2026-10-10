@@ -15,7 +15,9 @@
 //   • MIN_W: нода расширена до MIN_W при создании и при onConfigure;
 //   • персистентность: onConfigure читает widgets_values_named → positional
 //     фолбэк; любая правка пишет JSON в loras_data;
-//   • клик по имени открывает инфо, клик по превью — пикер превью,
+//   • клик по превью И по имени открывает ЕДИНУЮ карточку LoRA
+//     (детали сверху: имя-ссылка на CivitAI, baseModel, триггеры, описание,
+//     permalink; ниже — сетка кандидатов превью + upload/reset),
 //     клик «+ LoRA» — модалку выбора;
 //   • локализация RU/EN по setLocaleOverride; глобальных слушателей нет.
 // Запуск: cd Degg_LoRa_Loader && node tests/_smoke_degg_lora_loader.mjs
@@ -155,8 +157,21 @@ class FakeEl {
     for (const fn of this.listeners(type)) fn(e);
     return e;
   }
-  focus() {}
-  blur() {}
+  focus() {
+    this._focused = true;
+  }
+  blur() {
+    this._focused = false;
+  }
+  select() {
+    this._selected = true;
+  }
+  setPointerCapture(id) {
+    this._captured = id;
+  }
+  releasePointerCapture(id) {
+    this._released = id;
+  }
   remove() {
     if (this.parentNode) this.parentNode.removeChild(this);
   }
@@ -270,6 +285,10 @@ const sandbox = {
 };
 sandbox.globalThis = sandbox;
 sandbox.window = sandbox;
+// Нативное поле силы форматирует значение через Intl.NumberFormat(locale)
+// (ScrubableNumberInput.vue) — заглушка обязана дать тот же Intl, иначе
+// локальный формат не проверить.
+sandbox.Intl = Intl;
 vm.createContext(sandbox);
 vm.runInContext(fs.readFileSync(FILE, "utf8"), sandbox, { filename: "degg_lora_loader.js" });
 
@@ -523,8 +542,37 @@ check("строка: toggle есть", !!byClass(row0, "dl-sw"));
 check("строка: превью есть", !!byClass(row0, "dl-thumb"));
 check("строка: имя файла в dl-ln (sync fallback)", !!byClass(row0, "dl-ln") && byClass(row0, "dl-ln").textContent === "a.safetensors",
   (() => { const ln = byClass(row0, "dl-ln"); return ln ? JSON.stringify(ln.textContent) : "нет dl-ln"; })());
-check("строка: strength = 0.7", !!byClass(row0, "dl-num") && byClass(row0, "dl-num").value === "0.7",
-  String(byClass(row0, "dl-num") && byClass(row0, "dl-num").value));
+check("строка: strength = 0.7 в поле степпера",
+  !!byClass(row0, "dl-num-input") && byClass(row0, "dl-num-input").value === "0.7",
+  String(byClass(row0, "dl-num-input") && byClass(row0, "dl-num-input").value));
+check("строка: сила — пилюля со степпером (- / input / +), как в Nodes 2.0", (() => {
+  const pill = byClass(row0, "dl-num");
+  if (!pill) return false;
+  const btns = pill.children.filter((c) => c.tagName === "BUTTON");
+  const mid = pill.children.find((c) => String(c.className).includes("dl-num-mid"));
+  const input = mid ? byClass(mid, "dl-num-input") : null;
+  return btns.length === 2 && !!mid && !!input
+    && pill.children.indexOf(btns[0]) < pill.children.indexOf(mid)
+    && pill.children.indexOf(mid) < pill.children.indexOf(btns[1]);
+})(), (() => { const p = byClass(row0, "dl-num"); return p ? JSON.stringify(p.children.map((c) => c.tagName + ":" + c.className)) : "нет пилюли"; })());
+// Ручная тяга по значению (scrub): поле накрыто прозрачным слоем — как в
+// нативном ScrubableNumberInput.vue.
+check("строка: поле силы накрыто scrub-слоем (.dl-num-scrub поверх input)", (() => {
+  const pill = byClass(row0, "dl-num");
+  const mid = pill ? byClass(pill, "dl-num-mid") : null;
+  const input = mid ? byClass(mid, "dl-num-input") : null;
+  const sc = mid ? byClass(mid, "dl-num-scrub") : null;
+  return !!input && !!sc && mid.children.indexOf(input) < mid.children.indexOf(sc);
+})(), (() => {
+  const pill = byClass(row0, "dl-num");
+  const mid = pill ? byClass(pill, "dl-num-mid") : null;
+  return mid ? JSON.stringify(mid.children.map((c) => c.tagName + ":" + c.className)) : "нет dl-num-mid";
+})());
+check("строка: кнопки степпера — SVG-иконки (lucide заливка/штрих)", (() => {
+  const pill = byClass(row0, "dl-num");
+  const btns = pill ? pill.children.filter((c) => c.tagName === "BUTTON") : [];
+  return btns.length === 2 && btns.every((b) => b.children.some((c) => c.tagName === "SVG"));
+})(), (() => { const p = byClass(row0, "dl-num"); return p ? JSON.stringify(p.children.map((c) => c.children.map((x) => x.tagName))) : "нет"; })());
 check("строка: кнопка удаления есть", !!byClass(row0, "dl-del"));
 check("строка: корзина — SVG-иконка", (() => {
   const del = byClass(row0, "dl-del");
@@ -593,33 +641,46 @@ check("строка: sub/c — имя из info (Plain C), пустой baseMode
 })());
 
 // ── T2: имя → инфо, превью → пикер превью, upload/reset ──────────────────
-check("T2: экспорты openPreviewPicker/uploadPreview есть",
-  typeof DL.openPreviewPicker === "function" && typeof DL.uploadPreview === "function",
-  JSON.stringify([typeof DL.openPreviewPicker, typeof DL.uploadPreview]));
+check("T2: экспорты openLoraCard/openPreviewPicker/uploadPreview есть",
+  typeof DL.openLoraCard === "function"
+  && typeof DL.openPreviewPicker === "function"
+  && typeof DL.uploadPreview === "function",
+  JSON.stringify([typeof DL.openLoraCard, typeof DL.openPreviewPicker, typeof DL.uploadPreview]));
+DL.closeModal();
 byClass(row0, "dl-ln").dispatch("click");
 await flush();
-check("T2: клик по имени открывает инфо", (() => {
+const cardByName = documentStub.body.children[documentStub.body.children.length - 1];
+check("T2: клик по имени открывает карточку LoRA (одна модалка)", (() => {
   const m = documentStub.body.children[documentStub.body.children.length - 1];
-  return documentStub.body.children.length > 0 && !!m && !!byClass(m, "dl-info");
+  return documentStub.body.children.length === 1 && !!m && !!byClass(m, "dl-ppick");
 })(), String(documentStub.body.children.length));
-check("T2: инфо по имени показывает имя из /info",
+check("T2: карточка по имени показывает имя из /info",
   !!findEl(documentStub.body, (e) => e.textContent === "054 - Fused Glass"));
+check("T2: карточка по имени содержит сетку кандидатов превью",
+  !!cardByName && findAll(cardByName, (e) => String(e.className).includes("dl-pcand")).length >= 1,
+  cardByName ? String(findAll(cardByName, (e) => String(e.className).includes("dl-pcand")).length) : "нет модалки");
 DL.closeModal();
 byClass(row0, "dl-thumb").dispatch("click");
 await flush();
 const ppModal = documentStub.body.children[documentStub.body.children.length - 1];
-check("T2: клик по превью открывает пикер, а не инфо",
-  !!ppModal && !!byClass(ppModal, "dl-ppick") && !byClass(ppModal, "dl-info"),
+check("T2: клик по превью открывает ТУ ЖЕ карточку LoRA (одна модалка, без отдельной инфо)",
+  !!ppModal && !!byClass(ppModal, "dl-ppick") && documentStub.body.children.length === 1,
   ppModal ? String(ppModal.children.map((e) => e.className)) : "нет модалки");
+check("T2: карточка из превью содержит детали /info (baseModel)",
+  !!findEl(ppModal, (e) => e.textContent === "Krea 2"),
+  "нет baseModel в карточке");
 check("T2: карточка пикера — полный путь в шапке", (() => {
   const p = ppModal && byClass(ppModal, "dl-path");
   return !!p && p.textContent === "a.safetensors" && p.title === "a.safetensors";
 })());
 await flush();
-check("T2: карточка пикера — ссылка CivitAI (permalink)", (() => {
-  const link = ppModal && findEl(ppModal, (e) => e.tagName === "A" && String(e.className).includes("dl-link"));
+check("T2: карточка пикера — имя-ссылка ведёт на CivitAI (permalink)", (() => {
+  const link = ppModal && findEl(ppModal, (e) => e.tagName === "A" && String(e.className).includes("dl-iname"));
   return !!link && link.href === "https://civitai.com/models/1";
-})(), (() => { const link = ppModal && findEl(ppModal, (e) => e.tagName === "A"); return link ? String(link.href) : "нет ссылки"; })());
+})(), (() => { const link = ppModal && findEl(ppModal, (e) => e.tagName === "A"); return link ? String(link.className) + " " + link.href : "нет ссылки"; })());
+check("T2: карточка пикера — отдельной строки-ссылки dl-link нет",
+  !!ppModal && !findEl(ppModal, (e) => String(e.className).includes("dl-link")),
+  JSON.stringify(findAll(ppModal, (e) => String(e.className).includes("dl-link")).map((e) => String(e.className))));
 check("T2: локальный кандидат превью", !!ppModal
   && findAll(ppModal, (e) => e.tagName === "IMG" && String(e.src).includes("/degg_lora_loader/img?file=a.safetensors")).length === 1,
   JSON.stringify(findAll(ppModal, (e) => e.tagName === "IMG").map((e) => e.src)));
@@ -727,13 +788,140 @@ check("toggleAt: мастер-переключатель включён (все 
 
 DL.setStrength(node, 1, "0.25");
 check("setStrength: значение в loras_data", json(dataW)[1].strength === 0.25, String(json(dataW)[1].strength));
-check("setStrength: input.value обновлён", byClass(listEl.children[1], "dl-num").value === "0.25");
+check("setStrength: поле степпера обновлено", (() => {
+  const el = byClass(listEl.children[1], "dl-num-input");
+  return !!el && el.value === "0.25";
+})(), (() => { const el = byClass(listEl.children[1], "dl-num-input"); return el ? JSON.stringify(el.value) : "нет поля"; })());
 DL.setStrength(node, 1, "abc");
 check("setStrength: нечисловое → 1.0", json(dataW)[1].strength === 1);
 DL.setStrength(node, 1, "250");
 check("setStrength: кламп в 100", json(dataW)[1].strength === 100);
 DL.setStrength(node, 1, "-250");
 check("setStrength: кламп в -100", json(dataW)[1].strength === -100);
+
+// ── степпер силы: клики «−»/«+» ──────────────────────────────────────────
+const numPill = byClass(listEl.children[1], "dl-num");
+const numBtns = numPill ? numPill.children.filter((c) => c.tagName === "BUTTON") : [];
+check("степпер: в пилюле две кнопки", numBtns.length === 2, String(numBtns.length));
+if (numBtns.length === 2) {
+  DL.setStrength(node, 1, "1");
+  numBtns[1].dispatch("click");
+  check("степпер +: сила растёт на 0.05 (без float-мусора)",
+    json(dataW)[1].strength === 1.05, String(json(dataW)[1].strength));
+  numBtns[0].dispatch("click");
+  numBtns[0].dispatch("click");
+  check("степпер -: сила падает на 0.1",
+    json(dataW)[1].strength === 0.95, String(json(dataW)[1].strength));
+  DL.setStrength(node, 1, "100");
+  numBtns[1].dispatch("click");
+  check("степпер: кламп сверху — выше 100 не уходит",
+    json(dataW)[1].strength === 100, String(json(dataW)[1].strength));
+}
+
+// ── scrub: зажатой ЛКМ тянуть влево/вправо (как нативное поле Nodes 2.0) ──
+// Нативный код: каждый шаг силы = 10px движения, вправо — значение растёт
+// (usePointerSwipe.distanceX = posStart.x − posEnd.x).
+DL.setStrength(node, 1, "1");
+const scrubEl = byClass(listEl.children[1], "dl-num-scrub");
+check("scrub: слой слушает pointerdown/pointermove/pointerup",
+  !!scrubEl && scrubEl.listeners("pointerdown").length === 1
+    && scrubEl.listeners("pointermove").length === 1
+    && scrubEl.listeners("pointerup").length === 1,
+  scrubEl ? JSON.stringify(["pointerdown", "pointermove", "pointerup"]
+    .map((t) => t + "=" + scrubEl.listeners(t).length)) : "нет слоя");
+check("scrub: события указателя не уходят на window/document",
+  windowAdds === 0 && documentAdds === 0, `window=${windowAdds} document=${documentAdds}`);
+if (scrubEl) {
+  scrubEl.dispatch("pointerdown", { clientX: 100, clientY: 50, pointerId: 7 });
+  check("scrub: pointerdown захватывает указатель (setPointerCapture)",
+    scrubEl._captured === 7, String(scrubEl._captured));
+  scrubEl.dispatch("pointermove", { clientX: 130, clientY: 50, pointerId: 7 });
+  check("scrub: +30px вправо = +3 шага (1 → 1.15)",
+    json(dataW)[1].strength === 1.15, String(json(dataW)[1].strength));
+  check("scrub: поле показывает новое значение без перерисовки списка",
+    (() => {
+      const f = byClass(listEl.children[1], "dl-num-input");
+      return !!f && f.value === "1.15";
+    })(), (() => {
+      const f = byClass(listEl.children[1], "dl-num-input");
+      return f ? JSON.stringify(f.value) : "нет поля";
+    })());
+  scrubEl.dispatch("pointermove", { clientX: 105, clientY: 50, pointerId: 7 });
+  check("scrub: назад к 105px = −2 шага (1.15 → 1.05)",
+    json(dataW)[1].strength === 1.05, String(json(dataW)[1].strength));
+  scrubEl.dispatch("pointermove", { clientX: 60, clientY: 50, pointerId: 7 });
+  check("scrub: дальше влево 60px = −5 шагов (1.05 → 0.8)",
+    json(dataW)[1].strength === 0.8, String(json(dataW)[1].strength));
+  // Путь от старта уже 80px (≥50) — это тяга, а не клик.
+  scrubEl.dispatch("pointermove", { clientX: 20, clientY: 50, pointerId: 7 });
+  check("scrub: влево 20px = −4 шага (0.8 → 0.6)",
+    json(dataW)[1].strength === 0.6, String(json(dataW)[1].strength));
+  scrubEl.dispatch("pointerup", { clientX: 20, clientY: 50, pointerId: 7 });
+  check("scrub: после тяги указатель отпущен (releasePointerCapture)",
+    scrubEl._released === 7, String(scrubEl._released));
+  check("scrub: тяга (≥50px от старта) НЕ уходит в ручной ввод",
+    !String(scrubEl.className).includes("dl-scrub-edit"), String(scrubEl.className));
+  // Клик без движения — как в нативном поле: фокус + выделенный текст.
+  const field = byClass(listEl.children[1], "dl-num-input");
+  field._focused = false;
+  field._selected = false;
+  scrubEl.dispatch("pointerdown", { clientX: 200, clientY: 50, pointerId: 8 });
+  scrubEl.dispatch("pointerup", { clientX: 200, clientY: 50, pointerId: 8 });
+  check("scrub: клик без движения → фокус в поле (ручной ввод)",
+    field._focused === true, String(field._focused));
+  check("scrub: клик без движения → текст выделен (как native select)",
+    field._selected === true, String(field._selected));
+  check("scrub: во время ручного ввода слой спрятан (.dl-scrub-edit)",
+    String(scrubEl.className).includes("dl-scrub-edit"), String(scrubEl.className));
+  check("scrub: клик без движения значение не менял",
+    json(dataW)[1].strength === 0.6, String(json(dataW)[1].strength));
+  field.dispatch("blur");
+  check("scrub: blur возвращает слой (ввод закончен)",
+    !String(scrubEl.className).includes("dl-scrub-edit"), String(scrubEl.className));
+  field._focused = false;
+  scrubEl.dispatch("pointerdown", { clientX: 300, clientY: 50, pointerId: 9 });
+  scrubEl.dispatch("pointermove", { clientX: 400, clientY: 50, pointerId: 9 });
+  check("scrub: свайп на 100px → 10 шагов (0.6 → 1.1)",
+    json(dataW)[1].strength === 1.1, String(json(dataW)[1].strength));
+  scrubEl.dispatch("pointerup", { clientX: 400, clientY: 50, pointerId: 9 });
+  check("scrub: свайп не открывает ручной ввод", field._focused === false, String(field._focused));
+  // Кламп работает и при тяге (вправо +200px = +20 шагов → за верхней границей).
+  DL.setStrength(node, 1, "99.8");
+  scrubEl.dispatch("pointerdown", { clientX: 0, clientY: 0, pointerId: 10 });
+  scrubEl.dispatch("pointermove", { clientX: 200, clientY: 0, pointerId: 10 });
+  scrubEl.dispatch("pointerup", { clientX: 200, clientY: 0, pointerId: 10 });
+  check("scrub: кламп при тяге (выше 100 не уходит)",
+    json(dataW)[1].strength === 100, String(json(dataW)[1].strength));
+  // Жест забрал браузер (pointercancel) — как в нативном поле, в ручной ввод
+  // не уходим и слой не прячем.
+  field._focused = false;
+  scrubEl.dispatch("pointerdown", { clientX: 500, clientY: 50, pointerId: 11 });
+  scrubEl.dispatch("pointercancel", { clientX: 500, clientY: 50, pointerId: 11 });
+  check("scrub: pointercancel не открывает ручной ввод",
+    field._focused === false && !String(scrubEl.className).includes("dl-scrub-edit"),
+    `focused=${field._focused} class=${scrubEl.className}`);
+  DL.setStrength(node, 1, "1");
+}
+
+// ── локальный формат числа (как нативный виджет) ───────────────────────
+DL.setLocaleOverride("ru");
+const nodeRu = makeNode();
+protoHolder.onNodeCreated.call(nodeRu);
+protoHolder.onConfigure.call(nodeRu, {
+  widgets_values: [JSON.stringify([{ on: true, lora: "ru.safetensors", strength: 0.7, strength_clip: 0.7 }])],
+});
+const listRu = byClass(nodeRu.widgets.find((w) => w.name === "degg_lora_list").element, "dl-list");
+const ruInput = listRu && listRu.children[0] ? byClass(listRu.children[0], "dl-num-input") : null;
+check("RU: сила показывается с запятой (как нативное поле)",
+  !!ruInput && ruInput.value === "0,7", ruInput ? JSON.stringify(ruInput.value) : "нет поля");
+DL.setStrength(nodeRu, 0, "3,5");
+check("RU: ввод с запятой принимается", (() => {
+  const d = nodeRu.widgets.find((w) => w.name === "loras_data");
+  const j = json(d);
+  return !!j && j[0].strength === 3.5;
+})(), (() => { const d = nodeRu.widgets.find((w) => w.name === "loras_data"); return String(d && d.value); })());
+DL.setLocaleOverride(null);
+protoHolder.onRemoved.call(nodeRu);
 
 DL.toggleAll(node);
 check("toggleAll: все выключились", json(dataW).every((l) => l.on === false)
@@ -912,10 +1100,21 @@ check("openInfo: имя модели показано", !!findEl(infoModal, (e) 
 check("openInfo: описание без HTML-тегов", !!findEl(infoModal, (e) => e.textContent === "Hello world"));
 check("openInfo: базовая модель", !!findEl(infoModal, (e) => e.textContent === "SDXL 1.0"));
 check("openInfo: триггеры показаны", !!findEl(infoModal, (e) => String(e.textContent).includes("cool")));
+check("openInfo: имя модели — кликабельная ссылка на CivitAI", (() => {
+  const nm = findEl(infoModal, (e) => e.textContent === "Cool LoRA");
+  return !!nm && nm.tagName === "A" && nm.href === "https://civitai.com/models/1";
+})(), (() => { const nm = findEl(infoModal, (e) => e.textContent === "Cool LoRA"); return nm ? nm.tagName + " " + nm.href : "нет"; })());
 check("openInfo: ссылка на CivitAI", (() => {
   const a = findEl(infoModal, (e) => e.tagName === "A");
   return !!a && a.href === "https://civitai.com/models/1";
 })());
+check("openInfo: отдельной строки-ссылки dl-link нет (ссылка — само имя)",
+  !findEl(infoModal, (e) => String(e.className).includes("dl-link")),
+  JSON.stringify(findAll(infoModal, (e) => String(e.className).includes("dl-link")).map((e) => String(e.className))));
+check("openInfo: у имени-ссылки есть подсказка про CivitAI (кликабельность видна)", (() => {
+  const nm = findEl(infoModal, (e) => e.textContent === "Cool LoRA");
+  return !!nm && (nm.title === DL.LOCALES.en.openCivitai || nm.title === DL.LOCALES.ru.openCivitai);
+})(), (() => { const nm = findEl(infoModal, (e) => e.textContent === "Cool LoRA"); return nm ? JSON.stringify(nm.title) : "нет"; })());
 check("openInfo: GET /degg_lora_loader/info?file=...", FETCH_LOG.some((u) => u.includes("/degg_lora_loader/info?file=") && u.includes("openme.safetensors")),
   JSON.stringify(FETCH_LOG.filter((u) => String(u).includes("/info"))));
 check("openInfo: закрытие по кнопке", (() => {

@@ -1,4 +1,12 @@
 const HEAD_H = 34;
+// Шаг кнопок «−»/«+» силы LoRA (как у поля силы в нативной ноде).
+const STRENGTH_STEP = 0.05;
+// Ручная тяга по значению (scrub) — как у поля силы в нативной ноде:
+// один шаг на каждые 10px движения и порог 50px, отделяющий тягу от клика.
+const SCRUB_PX_PER_STEP = 10;
+const SCRUB_THRESHOLD = 50;
+// Состояние активной тяги: слой, строка и накопленный путь в пикселях.
+const SCRUB = { el: null, node: null, index: -1, startX: 0, startY: 0, delta: 0, swiping: false };
 const ROW_H = 90;
 const LIST_ROWS = 3;
 const MARGIN = 10;
@@ -8,7 +16,7 @@ const MIN_W = 360;
 const CSS_TEXT = [
   ".dl-root{height:100%;min-height:304px;display:flex;flex-direction:column;overflow:hidden;margin:10px;font-size:13px;color:#ddd;}",
   ".dl-head{display:flex;align-items:center;gap:6px;height:34px;flex:0 0 auto;}",
-  ".dl-add,.dl-all,.dl-x,.dl-del,.dl-link{font:inherit;cursor:pointer;}",
+  ".dl-add,.dl-all,.dl-x,.dl-del{font:inherit;cursor:pointer;}",
   ".dl-add{flex:0 0 auto;padding:4px 10px;border:1px solid #5a5a5a;border-radius:4px;background:#2a2a2a;color:#eee;}",
   ".dl-count{flex:1 1 auto;text-align:right;color:#9c9c9c;}",
   ".dl-allwrap{display:flex;align-items:center;gap:6px;flex:0 0 auto;}",
@@ -30,7 +38,14 @@ const CSS_TEXT = [
   ".dl-name{flex:1 1 auto;min-width:0;display:flex;flex-direction:column;justify-content:center;gap:1px;overflow:hidden;}",
   ".dl-bm{font-size:10px;color:#8a8a8a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}",
   ".dl-ln{font-size:12px;color:#eee;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}",
-  ".dl-num{flex:0 0 auto;width:74px;padding:4px;border:1px solid #4a4a4a;border-radius:4px;background:#1a1a1a;color:#eee;}",
+  ".dl-num{flex:0 0 auto;width:92px;height:24px;display:flex;align-items:center;overflow:hidden;border-radius:6px;background:var(--component-node-widget-background,#2a2a2a);color:var(--component-node-foreground,#ddd);font-size:12px;}",
+  ".dl-num-mid{position:relative;flex:1 1 auto;min-width:0;height:100%;display:flex;align-items:center;}",
+  ".dl-num-scrub{position:absolute;top:0;right:0;bottom:0;left:0;z-index:1;cursor:ew-resize;touch-action:pan-y;}",
+  ".dl-num-scrub.dl-scrub-edit{display:none;}",
+  ".dl-num-btn{flex:0 0 auto;width:24px;height:100%;padding:0;border:0;border-radius:0;background:transparent;color:inherit;font:inherit;cursor:pointer;display:flex;align-items:center;justify-content:center;}",
+  ".dl-num-btn:hover{background:var(--component-node-widget-background-hovered,rgba(255,255,255,.1));}",
+  ".dl-num-btn svg{width:14px;height:14px;display:block;}",
+  ".dl-num-input{flex:1 1 auto;min-width:0;height:100%;border:0;background:transparent;color:inherit;font:inherit;text-align:center;padding:0;outline:none;}",
   ".dl-del{flex:0 0 auto;width:28px;height:28px;color:#9c9c9c;background:transparent;border:none;outline:none;}",
   ".dl-modal{position:fixed;inset:0;z-index:1200;background:rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center;}",
   ".dl-picker,.dl-info{position:relative;max-width:560px;width:90%;max-height:80vh;overflow-y:auto;background:#232323;border:1px solid #4a4a4a;border-radius:8px;padding:14px;}",
@@ -47,13 +62,15 @@ const CSS_TEXT = [
   ".dl-ilabel{color:#9c9c9c;flex:0 0 auto;}",
   ".dl-ival{flex:1 1 auto;min-width:0;}",
   ".dl-idesc{margin:6px 0;white-space:pre-wrap;}",
-  ".dl-link{display:inline-block;margin:6px 0;color:#7fb4ff;}",
   ".dl-imgs{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px;}",
   ".dl-iimg,.dl-localimg{max-width:150px;max-height:150px;border-radius:4px;}",
   ".dl-ierr{color:#e08a8a;}",
   ".dl-ppick{max-width:640px;}",
   ".dl-pcard{display:flex;align-items:center;gap:8px;margin-bottom:8px;}",
   ".dl-path{flex:1 1 auto;min-width:0;font-size:12px;color:#ccc;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}",
+  ".dl-details{margin:2px 0 8px;}",
+  "a.dl-iname{display:inline-block;margin-bottom:6px;color:#7fb4ff;text-decoration:none;cursor:pointer;}",
+  "a.dl-iname:hover{text-decoration:underline;}",
   ".dl-pgrid{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px;}",
   ".dl-pcand{width:140px;height:140px;border:2px solid #3a3a3a;border-radius:6px;overflow:hidden;cursor:pointer;background:#151515;display:flex;align-items:center;justify-content:center;}",
   ".dl-pcand.dl-pcur{border-color:var(--primary-background,#5b8def);}",
@@ -86,9 +103,10 @@ const LOCALES = {
     triggers: "Триггеры",
     description: "Описание",
     openCivitai: "Открыть на CivitAI",
+    incStrength: "Увеличить силу",
+    decStrength: "Уменьшить силу",
     remove: "Удалить",
     loadError: "Не удалось загрузить данные",
-    previewTitle: "Превью LoRA",
     uploadBtn: "Загрузить картинку…",
     resetBtn: "Сбросить",
   },
@@ -103,9 +121,10 @@ const LOCALES = {
     triggers: "Triggers",
     description: "Description",
     openCivitai: "Open on CivitAI",
+    incStrength: "Increase strength",
+    decStrength: "Decrease strength",
     remove: "Remove",
     loadError: "Failed to load data",
-    previewTitle: "LoRA preview",
     uploadBtn: "Upload image…",
     resetBtn: "Reset",
   },
@@ -166,6 +185,31 @@ function findByClass(root, cls) {
 function stripHtml(text) {
   if (typeof text !== "string" || !text) return "";
   return text.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
+}
+// Значение силы показывается как нативное поле Nodes 2.0: число форматируется
+// через Intl.NumberFormat для текущего языка (в RU — «3,52»), а вводимый текст
+// принимает и запятую, и точку (ScrubableNumberInput.vue делает то же самое).
+function formatStrength(value) {
+  const f = Number(value);
+  if (!isFinite(f)) return String(value);
+  try {
+    if (typeof Intl === "object" && Intl && typeof Intl.NumberFormat === "function") {
+      return new Intl.NumberFormat(readComfyLocale(), {
+        useGrouping: false,
+        maximumFractionDigits: 4,
+      }).format(f);
+    }
+  } catch (err) {}
+  return String(f);
+}
+function normalizeNumberText(raw) {
+  if (typeof raw !== "string") return raw;
+  return raw.replace(/\s/g, "").replace(",", ".");
+}
+function roundStrength(value) {
+  const f = Number(value);
+  if (!isFinite(f)) return 0;
+  return Math.round(f * 10000) / 10000;
 }
 function numValue(value, def) {
   if (typeof value === "boolean" || value === null || value === undefined) return Number(def);
@@ -317,6 +361,29 @@ function attachThumb(host, name, entry, cls, lazy) {
   });
 }
 
+// Иконки lucide (minus/plus) — как в нативном виджете силы.
+function lucideIcon(name) {
+  const SVG_NS = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(SVG_NS, "svg");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("width", "14");
+  svg.setAttribute("height", "14");
+  svg.setAttribute("fill", "none");
+  svg.setAttribute("stroke", "currentColor");
+  svg.setAttribute("stroke-width", "2");
+  svg.setAttribute("stroke-linecap", "round");
+  svg.setAttribute("stroke-linejoin", "round");
+  const horizontal = document.createElementNS(SVG_NS, "path");
+  horizontal.setAttribute("d", "M5 12h14");
+  svg.appendChild(horizontal);
+  if (name === "plus") {
+    const vertical = document.createElementNS(SVG_NS, "path");
+    vertical.setAttribute("d", "M12 5v14");
+    svg.appendChild(vertical);
+  }
+  return svg;
+}
+
 const APP = (window.comfyAPI && window.comfyAPI.app && window.comfyAPI.app.app) || window.app || null;
 
 function ensureState(node) {
@@ -400,14 +467,14 @@ function buildRow(node, index) {
   const thumb = mk("div", "dl-thumb");
   attachThumb(thumb, entry.lora, entry, "dl-img");
   thumb.addEventListener("click", function () {
-    openPreviewPicker(node, index);
+    openLoraCard(node, index);
   });
   const name = mk("div", "dl-name");
   const bm = mk("div", "dl-bm");
   const ln = mk("div", "dl-ln");
   ln.textContent = entry.lora;
   ln.addEventListener("click", function () {
-    openInfo(node, entry.lora);
+    openLoraCard(node, index);
   });
   name.appendChild(bm);
   name.appendChild(ln);
@@ -417,13 +484,53 @@ function buildRow(node, index) {
     if (typeof info.name === "string" && info.name) ln.textContent = info.name;
     if (typeof info.baseModel === "string" && info.baseModel) bm.textContent = info.baseModel;
   });
-  const num = mk("input", "dl-num");
-  num.type = "number";
-  num.step = "0.05";
-  num.value = String(entry.strength);
-  num.addEventListener("change", function (ev) {
-    setStrength(node, index, ev && ev.target ? ev.target.value : num.value);
+  // Пилюля силы — структура нативного ScrubableNumberInput.vue:
+  // кнопка «−» / поле / кнопка «+».
+  const num = mk("div", "dl-num");
+  const numDec = mk("button", "dl-num-btn dl-num-dec");
+  numDec.type = "button";
+  numDec.setAttribute("aria-label", t("decStrength"));
+  numDec.appendChild(lucideIcon("minus"));
+  numDec.addEventListener("click", function () {
+    stepStrength(node, index, -1);
   });
+  const numInput = mk("input", "dl-num-input");
+  numInput.type = "text";
+  numInput.inputMode = "decimal";
+  numInput.setAttribute("autocomplete", "off");
+  numInput.value = formatStrength(entry.strength);
+  numInput.addEventListener("change", function (ev) {
+    setStrength(node, index, ev && ev.target ? ev.target.value : numInput.value);
+  });
+  numInput.addEventListener("blur", function () {
+    setClassFlag(numScrub, "dl-scrub-edit", false);
+  });
+  // Прозрачный слой поверх поля: зажатой ЛКМ можно тянуть значение влево/
+  // вправо (курсор ←→), как в нативном поле силы Nodes 2.0.
+  const numMid = mk("div", "dl-num-mid");
+  const numScrub = mk("div", "dl-num-scrub");
+  numScrub.addEventListener("pointerdown", function (ev) {
+    scrubBegin(numScrub, node, index, ev);
+  });
+  numScrub.addEventListener("pointermove", function (ev) {
+    scrubDrag(ev);
+  });
+  numScrub.addEventListener("pointerup", function (ev) {
+    scrubEnd(numScrub, numInput, ev);
+  });
+  numScrub.addEventListener("pointercancel", function (ev) {
+    // Жест забрал браузер — как в нативном поле, в ручной ввод не уходим.
+    scrubEnd(numScrub, numInput, ev, true);
+  });
+  numMid.append(numInput, numScrub);
+  const numInc = mk("button", "dl-num-btn dl-num-inc");
+  numInc.type = "button";
+  numInc.setAttribute("aria-label", t("incStrength"));
+  numInc.appendChild(lucideIcon("plus"));
+  numInc.addEventListener("click", function () {
+    stepStrength(node, index, 1);
+  });
+  num.append(numDec, numMid, numInc);
   const del = mk("button", "dl-del");
   del.setAttribute("title", t("remove"));
   del.appendChild(trashIcon());
@@ -462,6 +569,14 @@ function refreshLabels(node) {
     for (let i = 0; i < rows.length; i++) {
       const del = findByClass(rows[i], "dl-del");
       if (del) del.setAttribute("title", t("remove"));
+      const dec = findByClass(rows[i], "dl-num-dec");
+      if (dec) dec.setAttribute("aria-label", t("decStrength"));
+      const inc = findByClass(rows[i], "dl-num-inc");
+      if (inc) inc.setAttribute("aria-label", t("incStrength"));
+      // Число переформатируется под новый язык (в RU — запятая).
+      const field = findByClass(rows[i], "dl-num-input");
+      const entry = s.entries[i];
+      if (field && entry) field.value = formatStrength(entry.strength);
     }
   }
 }
@@ -532,13 +647,99 @@ function setStrength(node, index, rawValue) {
   const s = ensureState(node);
   const entry = s.entries[index];
   if (!entry) return;
-  const f = numValue(rawValue, 1);
+  const f = roundStrength(numValue(normalizeNumberText(rawValue), 1));
   entry.strength = f;
   entry.strength_clip = f;
   syncData(node);
   const row = s.list && s.list.children[index];
-  const num = row ? findByClass(row, "dl-num") : null;
-  if (num) num.value = String(f);
+  const field = row ? findByClass(row, "dl-num-input") : null;
+  if (field) field.value = formatStrength(f);
+}
+
+// Клик по «−»/«+» — как кнопки нативного поля силы.
+function stepStrength(node, index, direction) {
+  const s = ensureState(node);
+  const entry = s.entries[index];
+  if (!entry) return;
+  setStrength(node, index, entry.strength + direction * STRENGTH_STEP);
+}
+
+// ── Ручная тяга по значению (scrub) ──────────────────────────────────────
+// Как у поля силы Nodes 2.0: прозрачный слой поверх цифр с курсором ←→,
+// зажатая ЛКМ тянет значение — один шаг силы на каждые 10px (вправо —
+// больше). Отпустил без движения — попадаем в ручной ввод с выделенным
+// текстом, и слой на это время прячется (.dl-scrub-edit), чтобы не мешать
+// правке. Слушатели — только на своём слое (+ захват указателя): window и
+// document не трогаем (глобальных слушателей в ноде нет).
+function setClassFlag(el, name, on) {
+  if (!el) return;
+  const parts = String(el.className || "").split(/\s+/).filter(Boolean);
+  const at = parts.indexOf(name);
+  if (on && at < 0) parts.push(name);
+  else if (!on && at >= 0) parts.splice(at, 1);
+  el.className = parts.join(" ");
+}
+
+function scrubBegin(el, node, index, ev) {
+  if (!el) return;
+  SCRUB.el = el;
+  SCRUB.node = node;
+  SCRUB.index = index;
+  SCRUB.startX = Number(ev && ev.clientX) || 0;
+  SCRUB.startY = Number(ev && ev.clientY) || 0;
+  SCRUB.delta = 0;
+  SCRUB.swiping = false;
+  if (ev && ev.pointerId !== undefined && typeof el.setPointerCapture === "function") {
+    try {
+      el.setPointerCapture(ev.pointerId);
+    } catch (err) {}
+  }
+  if (ev && typeof ev.preventDefault === "function") ev.preventDefault();
+}
+
+function scrubDrag(ev) {
+  if (!SCRUB.el) return;
+  const x = Number(ev && ev.clientX) || 0;
+  const y = Number(ev && ev.clientY) || 0;
+  const dx = SCRUB.startX - x;
+  const dy = SCRUB.startY - y;
+  if (!SCRUB.swiping && Math.max(Math.abs(dx), Math.abs(dy)) >= SCRUB_THRESHOLD) {
+    SCRUB.swiping = true;
+  }
+  const step = Math.trunc((dx - SCRUB.delta) / SCRUB_PX_PER_STEP);
+  if (!step) return;
+  SCRUB.delta += step * SCRUB_PX_PER_STEP;
+  // dx = старт − текущая, поэтому «потянул вправо» → шаг вверх.
+  stepStrength(SCRUB.node, SCRUB.index, -step);
+}
+
+function scrubEnd(el, field, ev, cancelled) {
+  if (!SCRUB.el) return;
+  const swiping = SCRUB.swiping || cancelled;
+  SCRUB.el = null;
+  SCRUB.node = null;
+  SCRUB.index = -1;
+  SCRUB.delta = 0;
+  SCRUB.swiping = false;
+  if (el && ev && ev.pointerId !== undefined && typeof el.releasePointerCapture === "function") {
+    try {
+      el.releasePointerCapture(ev.pointerId);
+    } catch (err) {}
+  }
+  if (swiping) return;
+  // Клик без движения — ручной ввод: слой прячем, текст выделен под замену.
+  setClassFlag(el, "dl-scrub-edit", true);
+  if (!field) return;
+  if (typeof field.focus === "function") {
+    try {
+      field.focus();
+    } catch (err) {}
+  }
+  if (typeof field.select === "function") {
+    try {
+      field.select();
+    } catch (err) {}
+  }
 }
 
 function closeModal() {
@@ -622,25 +823,33 @@ function openPicker(node) {
   document.body.appendChild(modal);
 }
 
-function showInfoModal(name, info) {
-  closeModal();
-  const modal = mk("div", "dl-modal");
-  const box = mk("div", "dl-info");
-  const title = mk("div", "dl-title");
-  title.textContent = t("infoTitle");
-  const closeBtn = mk("button", "dl-x");
-  closeBtn.textContent = "✕";
-  closeBtn.addEventListener("click", closeModal);
-  box.appendChild(title);
-  box.appendChild(closeBtn);
+function buildDetails(box, loraName, info) {
+  const title = info && typeof info.name === "string" && info.name
+    ? info.name
+    : String(loraName || "");
+  const permalink = info && typeof info.permalink === "string" && info.permalink
+    ? info.permalink
+    : "";
+  if (permalink) {
+    const nameLink = mk("a", "dl-iname");
+    nameLink.href = permalink;
+    nameLink.target = "_blank";
+    nameLink.rel = "noopener";
+    nameLink.title = t("openCivitai");
+    nameLink.textContent = title;
+    box.appendChild(nameLink);
+  } else {
+    const nm = mk("div", "dl-iname");
+    nm.textContent = title;
+    box.appendChild(nm);
+  }
   if (!info) {
     const err = mk("div", "dl-ierr");
     err.textContent = t("loadError");
     box.appendChild(err);
-  } else {
-    const nm = mk("div", "dl-iname");
-    nm.textContent = info.name ? String(info.name) : String(name || "");
-    box.appendChild(nm);
+    return;
+  }
+  {
     if (info.baseModel) {
       const row = mk("div", "dl-irow");
       const lb = mk("span", "dl-ilabel");
@@ -673,41 +882,19 @@ function showInfoModal(name, info) {
       box.appendChild(lb);
       box.appendChild(d);
     }
-    if (typeof info.permalink === "string" && info.permalink) {
-      const link = mk("a", "dl-link");
-      link.href = info.permalink;
-      link.target = "_blank";
-      link.rel = "noopener";
-      link.textContent = t("openCivitai");
-      box.appendChild(link);
-    }
-    if (typeof info.localImage === "string" && info.localImage) {
-      const li = mk("img", "dl-localimg");
-      li.src = info.localImage;
-      box.appendChild(li);
-    }
-    if (Array.isArray(info.images) && info.images.length) {
-      const imgs = mk("div", "dl-imgs");
-      for (const im of info.images) {
-        if (!im || typeof im.url !== "string" || !im.url) continue;
-        const el = mk("img", "dl-iimg");
-        el.src = im.url;
-        imgs.appendChild(el);
-      }
-      box.appendChild(imgs);
-    }
   }
-  modal.appendChild(box);
-  modal.addEventListener("click", function (ev) {
-    if (ev && ev.target === modal) closeModal();
-  });
-  document.body.appendChild(modal);
 }
 
 function openInfo(node, name) {
-  return fetchInfo(name).then(function (info) {
-    showInfoModal(name, info || null);
-  });
+  const s = ensureState(node);
+  let at = -1;
+  for (let i = 0; i < s.entries.length; i++) {
+    if (s.entries[i].lora === name) {
+      at = i;
+      break;
+    }
+  }
+  return openLoraCard(node, at, name);
 }
 
 function setPreview(node, index, url) {
@@ -721,15 +908,20 @@ function setPreview(node, index, url) {
   closeModal();
 }
 
-function openPreviewPicker(node, index) {
+// Единая карточка LoRA: клик по превью И по имени открывают её же.
+// Сверху — детали (имя-ссылка на CivitAI, baseModel, триггеры, описание,
+// permalink), ниже — сетка кандидатов превью + upload/reset.
+// `index` < 0 → детали без превью (openInfo для лоры вне списка).
+function openLoraCard(node, index, fallbackName) {
   closeModal();
   const s = ensureState(node);
-  const entry = s.entries[index];
-  if (!entry) return;
+  const entry = (typeof index === "number" && index >= 0) ? (s.entries[index] || null) : null;
+  const loraName = entry ? entry.lora : (typeof fallbackName === "string" ? fallbackName.trim() : "");
+  if (!loraName) return Promise.resolve(null);
   const modal = mk("div", "dl-modal");
   const box = mk("div", "dl-picker dl-ppick");
   const title = mk("div", "dl-title");
-  title.textContent = t("previewTitle");
+  title.textContent = t("infoTitle");
   const closeBtn = mk("button", "dl-x");
   closeBtn.textContent = "✕";
   closeBtn.addEventListener("click", closeModal);
@@ -737,12 +929,13 @@ function openPreviewPicker(node, index) {
   box.appendChild(closeBtn);
   const card = mk("div", "dl-pcard");
   const path = mk("div", "dl-path");
-  path.textContent = entry.lora;
-  path.title = entry.lora;
+  path.textContent = loraName;
+  path.title = loraName;
   card.appendChild(path);
   box.appendChild(card);
+  const details = mk("div", "dl-details");
+  box.appendChild(details);
   const grid = mk("div", "dl-pgrid");
-  box.appendChild(grid);
   const addCand = function (src, isCurrent) {
     if (!src) return;
     for (const existing of grid.children) {
@@ -759,52 +952,52 @@ function openPreviewPicker(node, index) {
     });
     grid.appendChild(cand);
   };
-  addCand(thumbSrc(entry.lora), !entry.preview);
-  addCand(entry.preview, !!entry.preview);
-  fetchInfo(entry.lora).then(function (info) {
-    if (!info) return;
-    if (typeof info.permalink === "string" && info.permalink) {
-      const link = mk("a", "dl-link");
-      link.href = info.permalink;
-      link.target = "_blank";
-      link.rel = "noopener";
-      link.textContent = t("openCivitai");
-      card.appendChild(link);
-    }
-    if (Array.isArray(info.images)) {
-      for (const im of info.images) {
-        if (!im || typeof im.url !== "string" || !im.url) continue;
-        addCand(im.url, entry.preview === im.url);
-      }
-    }
-  });
-  const btns = mk("div", "dl-pbtns");
-  const fileInput = mk("input", "dl-pfile");
-  fileInput.type = "file";
-  fileInput.accept = "image/*";
-  fileInput.addEventListener("change", function () {
-    const f = fileInput.files && fileInput.files.length ? fileInput.files[0] : null;
-    if (f) uploadPreview(node, index, f);
-  });
-  const upBtn = mk("button", "dl-pup");
-  upBtn.textContent = t("uploadBtn");
-  upBtn.addEventListener("click", function () {
-    if (fileInput.click) fileInput.click();
-  });
-  const resetBtn = mk("button", "dl-preset");
-  resetBtn.textContent = t("resetBtn");
-  resetBtn.addEventListener("click", function () {
-    setPreview(node, index, "");
-  });
-  btns.appendChild(upBtn);
-  btns.appendChild(resetBtn);
-  box.appendChild(fileInput);
-  box.appendChild(btns);
+  if (entry) {
+    box.appendChild(grid);
+    addCand(thumbSrc(loraName), !entry.preview);
+    addCand(entry.preview, !!entry.preview);
+    const btns = mk("div", "dl-pbtns");
+    const fileInput = mk("input", "dl-pfile");
+    fileInput.type = "file";
+    fileInput.accept = "image/*";
+    fileInput.addEventListener("change", function () {
+      const f = fileInput.files && fileInput.files.length ? fileInput.files[0] : null;
+      if (f) uploadPreview(node, index, f);
+    });
+    const upBtn = mk("button", "dl-pup");
+    upBtn.textContent = t("uploadBtn");
+    upBtn.addEventListener("click", function () {
+      if (fileInput.click) fileInput.click();
+    });
+    const resetBtn = mk("button", "dl-preset");
+    resetBtn.textContent = t("resetBtn");
+    resetBtn.addEventListener("click", function () {
+      setPreview(node, index, "");
+    });
+    btns.appendChild(upBtn);
+    btns.appendChild(resetBtn);
+    box.appendChild(fileInput);
+    box.appendChild(btns);
+  }
   modal.appendChild(box);
   modal.addEventListener("click", function (ev) {
     if (ev && ev.target === modal) closeModal();
   });
   document.body.appendChild(modal);
+  return fetchInfo(loraName).then(function (info) {
+    buildDetails(details, loraName, info || null);
+    if (entry && info && Array.isArray(info.images)) {
+      for (const im of info.images) {
+        if (!im || typeof im.url !== "string" || !im.url) continue;
+        addCand(im.url, entry.preview === im.url);
+      }
+    }
+    return info || null;
+  });
+}
+
+function openPreviewPicker(node, index) {
+  return openLoraCard(node, index);
 }
 
 function uploadPreview(node, index, file) {
@@ -992,8 +1185,10 @@ window.DeggLoraLoader = {
   toggleAt: toggleAt,
   toggleAll: toggleAll,
   setStrength: setStrength,
+  stepStrength: stepStrength,
   openPicker: openPicker,
   closeModal: closeModal,
+  openLoraCard: openLoraCard,
   openInfo: openInfo,
   openPreviewPicker: openPreviewPicker,
   setPreview: setPreview,

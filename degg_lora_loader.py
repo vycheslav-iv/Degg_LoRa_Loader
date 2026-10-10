@@ -17,6 +17,9 @@ NODE_KEY = "Degg_LoRa_Loader"
 
 CIVITAI_BY_HASH = "https://civitai.com/api/v1/model-versions/by-hash/"
 CACHE_DIR_NAME = "degg_lora_cache"
+# Версия формата кэша: `model-versions/by-hash` не отдаёт permalink, ссылка на
+# страницу лоры строится из modelId/id; старый кэш (без ссылки) не переиспользуем.
+CACHE_VERSION = "v2"
 HTTP_TIMEOUT = 10
 IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".webp")
 
@@ -183,6 +186,32 @@ def _sha256(path):
     return digest.hexdigest()
 
 
+def civitai_page_url(model_id, version_id=None):
+    """Ссылка на страницу модели CivitAI: modelId (и версия, если есть).
+
+    Живой /model-versions/by-hash поля permalink не содержит, зато отдаёт
+    modelId и id версии — из них и собирается кликабельная ссылка.
+    """
+    if isinstance(model_id, bool) or model_id is None:
+        return None
+    try:
+        model = int(model_id)
+    except Exception:
+        return None
+    if model <= 0:
+        return None
+    url = "https://civitai.com/models/%d" % model
+    if isinstance(version_id, bool) or version_id is None:
+        return url
+    try:
+        version = int(version_id)
+    except Exception:
+        return url
+    if version > 0:
+        url += "?modelVersionId=%d" % version
+    return url
+
+
 def _normalize_civitai(data, filename):
     if not isinstance(data, dict):
         return None
@@ -208,8 +237,8 @@ def _normalize_civitai(data, filename):
         if isinstance(candidate, str):
             file_url = candidate
     permalink = data.get("permalink")
-    if not isinstance(permalink, str):
-        permalink = None
+    if not isinstance(permalink, str) or not permalink:
+        permalink = civitai_page_url(data.get("modelId"), data.get("id"))
     images = []
     raw_images = data.get("images")
     if isinstance(raw_images, list):
@@ -249,7 +278,8 @@ def get_lora_info(lora_name, refresh=False):
         os.makedirs(cache_dir, exist_ok=True)
     except Exception:
         return None
-    cache_path = os.path.join(cache_dir, cache_key + ".json")
+    cache_path = os.path.join(
+        cache_dir, cache_key + "." + CACHE_VERSION + ".json")
     if not refresh and os.path.isfile(cache_path):
         try:
             with open(cache_path, "r", encoding="utf-8") as handle:
