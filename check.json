@@ -4,7 +4,7 @@
       "label": "python",
       "cmd": "python tests/_test_degg_lora_loader.py",
       "expect": ["FAIL: 0", "ТЕСТ ПРОЙДЕН"],
-      "description": "Python-песочница: роуты loras/img/info, кэш CivitAI по sha256, parse_loras, безопасность путей"
+      "description": "Python-песочница: роуты loras/img/info/thumb, кэш CivitAI по sha256 (негативный + stamp), кэш превью, parse_loras, безопасность путей, event loop не блокируется"
     },
     {
       "label": "smoke",

@@ -23,6 +23,7 @@
 // Запуск: cd Degg_LoRa_Loader && node tests/_smoke_degg_lora_loader.mjs
 
 import fs from "node:fs";
+import nodeCrypto from "node:crypto";
 import path from "node:path";
 import vm from "node:vm";
 import { fileURLToPath } from "node:url";
@@ -43,6 +44,7 @@ let rafQueue = [];
 let windowAdds = 0;
 let documentAdds = 0;
 const FETCH_LOG = [];
+const FD_LOG = [];
 const IO_INSTANCES = [];
 const IO_OBSERVED = [];
 // фикстура каталога: 3 лоры (у a — локальное превью, у остальных нет) — превью
@@ -244,11 +246,28 @@ const appInstance = {
   },
 };
 
+// crypto.subtle/TextEncoder в vm-контексте нет: подставляем НАСТОЯЩИЙ SHA-256
+// из node:crypto — JS обязан именовать кастомное превью тем же хешем, по
+// которому Python ищет orphan-файлы в input/. Тест может выключить subtle
+// (subtleStub) и проверить деградацию.
+const subtleStub = {
+  digest: (alg, data) => {
+    const h = nodeCrypto.createHash("sha256").update(Buffer.from(data)).digest();
+    return Promise.resolve(h.buffer.slice(h.byteOffset, h.byteOffset + h.byteLength));
+  },
+};
+
 const sandbox = {
   console,
   document: documentStub,
   Image: FakeImg,
   IntersectionObserver: FakeIO,
+  TextEncoder: class FakeTextEncoder {
+    encode(text) {
+      return new Uint8Array(Buffer.from(String(text), "utf8"));
+    }
+  },
+  crypto: { subtle: subtleStub },
   FormData: class FakeFormData {
     constructor() {
       this.parts = [];
@@ -279,6 +298,7 @@ const sandbox = {
   fetch: (url, opts) => {
     const u = String(url);
     FETCH_LOG.push(opts && opts.method ? opts.method + " " + u : u);
+    if (opts && opts.body && Array.isArray(opts.body.parts)) FD_LOG.push(opts.body.parts);
     return Promise.resolve(FETCH_RESULT(u));
   },
   addEventListener: () => {
@@ -602,12 +622,18 @@ check("счётчик: 1/2", countEl.textContent === "1/2", countEl.textContent)
 // превью: единый резолвер attachThumb (T1)
 await flush();
 const thumbImg = byClass(row0, "dl-img");
-check("превью: локальная картинка из каталога", !!thumbImg && thumbImg.src.includes("/degg_lora_loader/img"),
+check("превью: строка тянет превью через /thumb (серверный кэш)",
+  !!thumbImg && thumbImg.src === "/degg_lora_loader/thumb?file=a.safetensors",
   thumbImg ? thumbImg.src : "нет img");
 const row1Thumb = byClass(rows[1], "dl-thumb");
-check("превью: без картинок → глиф, не img с пустым src", !!row1Thumb && !!byClass(row1Thumb, "dl-glyph")
-  && !byClass(row1Thumb, "dl-img"),
-  row1Thumb ? JSON.stringify(row1Thumb.children.map((e) => e.className)) : "нет thumb");
+// Существует ли превью, JS больше не опрашивает (/info выброшен из пути
+// превью ради скорости) — отсутствие картинки видно только по error.
+check("превью: при error загрузки img заменяется глифом", (() => {
+  const img = row1Thumb && byClass(row1Thumb, "dl-img");
+  if (!img) return false;
+  img.dispatch("error");
+  return !!byClass(row1Thumb, "dl-glyph") && !byClass(row1Thumb, "dl-img");
+})(), row1Thumb ? JSON.stringify(row1Thumb.children.map((e) => e.className)) : "нет thumb");
 check("превью: у строк нет img с пустым src",
   findAll(root, (e) => e.tagName === "IMG" && !e.src).length === 0,
   JSON.stringify(findAll(root, (e) => e.tagName === "IMG").map((e) => e.src)));
@@ -618,10 +644,11 @@ const sw0 = byClass(row0, "dl-sw");
 check("toggle: dl-knob внутри переключателя", !!(sw0 && byClass(sw0, "dl-knob")));
 check("toggle: переключатель первый, ручка — третья (после превью)", row0.children[0] === sw0 && row0.children[2] !== sw0,
   JSON.stringify(row0.children.map((e) => e.className)));
-check("img: error-обработчик прячет битую картинку", (() => {
+check("img: error → битое превью уступает место глифу (не пустая рамка)", (() => {
   thumbImg.dispatch("error");
-  return thumbImg.style.display === "none";
-})(), String(thumbImg.style.display));
+  const th = byClass(row0, "dl-thumb");
+  return !!th && !!byClass(th, "dl-glyph") && !byClass(th, "dl-img");
+})(), (() => { const th = byClass(row0, "dl-thumb"); return th ? JSON.stringify(th.children.map((e) => e.className)) : "нет thumb"; })());
 
 // ── имя строки: серый dl-bm + белый dl-ln из /info (T7) ──────────────────
 check("строка: имя разложено на dl-bm + dl-ln", (() => {
@@ -688,25 +715,30 @@ check("T2: карточка пикера — отдельной строки-с�
 check("T2: локальный кандидат превью", !!ppModal
   && findAll(ppModal, (e) => e.tagName === "IMG" && String(e.src).includes("/degg_lora_loader/img?file=a.safetensors")).length === 1,
   JSON.stringify(findAll(ppModal, (e) => e.tagName === "IMG").map((e) => e.src)));
-check("T2: сайт-кандидат из images[0]", !!ppModal
-  && findAll(ppModal, (e) => e.tagName === "IMG" && e.src === "https://img/a.png").length === 1,
+// этап 3: кандидат CivitAI отдаётся локальным роутом, а не ссылкой на CDN
+const CARD_IDX0 = "/degg_lora_loader/thumb?file=a.safetensors&idx=0";
+check("T2: сайт-кандидат CivitAI = локальный /thumb?idx (не CDN)", !!ppModal
+  && findAll(ppModal, (e) => e.tagName === "IMG" && e.src === CARD_IDX0).length === 1,
+  JSON.stringify(findAll(ppModal, (e) => e.tagName === "IMG").map((e) => e.src)));
+check("T2: прямых ссылок на CDN в карточке нет", !!ppModal
+  && findAll(ppModal, (e) => e.tagName === "IMG" && String(e.src).indexOf("https://img/") === 0).length === 0,
   JSON.stringify(findAll(ppModal, (e) => e.tagName === "IMG").map((e) => e.src)));
 check("T2: кнопка загрузки своего превью", !!ppModal && !!findEl(ppModal, (e) => String(e.className).includes("dl-pup")));
 check("T2: кнопка сброса превью", !!ppModal && !!findEl(ppModal, (e) => String(e.className).includes("dl-preset")));
 const siteCand = ppModal && findAll(ppModal, (e) => String(e.className).includes("dl-pcand")).find((c) =>
-  findAll(c, (im) => im.tagName === "IMG" && im.src === "https://img/a.png").length === 1);
+  findAll(c, (im) => im.tagName === "IMG" && im.src === CARD_IDX0).length === 1);
 check("T2: обёртка сайта-кандидата .dl-pcand", !!siteCand);
 if (siteCand) {
   siteCand.dispatch("click");
   await flush();
 }
-check("T2: выбор кандидата → preview в loras_data", (() => {
+check("T2: выбор кандидата → в loras_data локальный /thumb?idx", (() => {
   const d = json(dataW);
-  return !!d && d[0].preview === "https://img/a.png";
+  return !!d && d[0].preview === CARD_IDX0;
 })(), String(dataW.value));
-check("T2: выбор кандидата → превью строки обновилось", (() => {
+check("T2: выбор кандидата → превью строки локальное /thumb?idx", (() => {
   const im = byClass(listEl.children[0], "dl-img");
-  return !!im && im.src === "https://img/a.png";
+  return !!im && im.src === CARD_IDX0;
 })(), (() => { const im = byClass(listEl.children[0], "dl-img"); return im ? im.src : "нет img"; })());
 check("T2: выбор кандидата → модалка закрыта", documentStub.body.children.length === 0,
   String(documentStub.body.children.length));
@@ -727,6 +759,27 @@ check("T2: upload → превью строки обновилось", (() => {
   const im = byClass(listEl.children[0], "dl-img");
   return !!im && im.src === "/view?filename=up.png&subfolder=&type=input";
 })(), (() => { const im = byClass(listEl.children[0], "dl-img"); return im ? im.src : "нет img"; })());
+
+// ── этап 2: кастомное превью именуется degg_lora_preview_<sha256(лоры)>_<ts> ─
+// Python по этому хешу удаляет превью лор, которых больше нет на диске.
+const lastUpload = () => FD_LOG[FD_LOG.length - 1];
+check("upload: имя = degg_lora_preview_<sha256(лоры)>_<ts>.<ext>", (() => {
+  const parts = lastUpload();
+  const name = parts && parts[0] ? parts[0][2] : null;
+  const key = nodeCrypto.createHash("sha256").update("a.safetensors", "utf8").digest("hex");
+  return typeof name === "string"
+    && new RegExp("^degg_lora_preview_" + key + "_\\d+\\.png$").test(name);
+})(), JSON.stringify((lastUpload() || []).map((p) => String(p[2]))));
+await (async () => {
+  const saved = sandbox.crypto.subtle;
+  sandbox.crypto.subtle = null;
+  if (typeof DL.uploadPreview === "function") await DL.uploadPreview(node, 0, { name: "plain.png" });
+  const parts = lastUpload();
+  check("upload: без crypto.subtle имя не подменяется (деградация без ошибок)",
+    !!parts && !!parts[0] && parts[0][2] === "plain.png",
+    JSON.stringify(parts && parts[0] && parts[0][2]));
+  sandbox.crypto.subtle = saved;
+})();
 DL.closeModal();
 
 byClass(listEl.children[0], "dl-thumb").dispatch("click");
@@ -741,12 +794,53 @@ check("T2: сброс очищает preview", (() => {
   const d = json(dataW);
   return !!d && !d[0].preview;
 })(), String(dataW.value));
-check("T2: сброс → превью снова локальное", (() => {
+check("T2: сброс → превью снова через /thumb", (() => {
   const im = byClass(listEl.children[0], "dl-img");
-  return !!im && String(im.src).includes("/degg_lora_loader/img?file=a.safetensors");
+  return !!im && im.src === "/degg_lora_loader/thumb?file=a.safetensors";
 })(), (() => { const im = byClass(listEl.children[0], "dl-img"); return im ? im.src : "нет img"; })());
 check("T2: сброс закрывает модалку", documentStub.body.children.length === 0,
   String(documentStub.body.children.length));
+
+// ── этап 3: старое CDN-превью из workflow мигрирует на /thumb?idx ─────────
+// Иначе уже сохранённые воркфлоу так и тянули бы картинку с CivitAI CDN.
+const node4 = makeNode();
+protoHolder.onNodeCreated.call(node4);
+protoHolder.onConfigure.call(node4, {
+  widgets_values: [JSON.stringify([{ on: true, lora: "a.safetensors", strength: 1, strength_clip: 1, preview: "https://img/a.png" }])],
+});
+await flush();
+const list4 = byClass(node4.widgets.find((w) => w.name === "degg_lora_list").element, "dl-list");
+const data4 = () => json(node4.widgets.find((w) => w.name === "loras_data"));
+check("миграция: до открытия карточки в loras_data лежит CDN-URL",
+  !!data4() && data4()[0].preview === "https://img/a.png",
+  JSON.stringify(data4() && data4()[0] && data4()[0].preview));
+await DL.openLoraCard(node4, 0);
+await flush();
+check("миграция: CDN-URL превью заменён на локальный /thumb?idx",
+  !!data4() && data4()[0].preview === CARD_IDX0,
+  JSON.stringify(data4() && data4()[0] && data4()[0].preview));
+check("миграция: превью строки стало локальным /thumb?idx", (() => {
+  const im = byClass(list4.children[0], "dl-img");
+  return !!im && im.src === CARD_IDX0;
+})(), (() => { const im = byClass(list4.children[0], "dl-img"); return im ? im.src : "нет img"; })());
+DL.closeModal();
+protoHolder.onRemoved.call(node4);
+
+const node5 = makeNode();
+protoHolder.onNodeCreated.call(node5);
+const CUSTOM_PREVIEW = "/view?filename=up.png&subfolder=&type=input";
+protoHolder.onConfigure.call(node5, {
+  widgets_values: [JSON.stringify([{ on: true, lora: "a.safetensors", strength: 1, strength_clip: 1, preview: CUSTOM_PREVIEW }])],
+});
+await flush();
+await DL.openLoraCard(node5, 0);
+await flush();
+check("миграция: кастомное превью (/view) не переводится на /thumb", (() => {
+  const d = json(node5.widgets.find((w) => w.name === "loras_data"));
+  return !!d && d[0].preview === CUSTOM_PREVIEW;
+})(), String(json(node5.widgets.find((w) => w.name === "loras_data"))));
+DL.closeModal();
+protoHolder.onRemoved.call(node5);
 
 // ── onConfigure: позиционный фолбэк ───────────────────────────────────────
 const node2 = makeNode();
@@ -1085,8 +1179,14 @@ await flush();
 check("негативный кэш: /info для лоры без картинок запрошен 1 раз", subFetchCount() === 1,
   `fetches=${subFetchCount()} log=${JSON.stringify(FETCH_LOG.filter((u) => String(u).includes("sub")))}`);
 const subRow = listEl.children[0];
-check("негативный кэш: строка получила глиф", !!(subRow && byClass(subRow, "dl-glyph")),
-  subRow ? JSON.stringify(subRow.children.map((e) => e.className)) : "нет строки");
+check("негативный кэш: битая картинка строки уступает место глифу", (() => {
+  if (!subRow) return false;
+  const th = byClass(subRow, "dl-thumb");
+  const img = th && byClass(th, "dl-img");
+  if (!img) return false;
+  img.dispatch("error");
+  return !!byClass(th, "dl-glyph");
+})(), subRow ? JSON.stringify(subRow.children.map((e) => e.className)) : "нет строки");
 DL.removeAt(node, 0);
 await flush();
 DL.addLora(node, "sub/c.safetensors");
@@ -1102,8 +1202,10 @@ DL.addLora(node, "b.safetensors");
 await flush();
 const bRow = listEl.children[1];
 const bImg = bRow ? byClass(bRow, "dl-img") : null;
-check("превью: без локалки → сайт-картинка из /info (images[0])",
-  !!bImg && bImg.src === "https://img/site-b.png", bImg ? bImg.src : "нет img");
+// (превью строки больше не зависит от /info — сервер отдаёт картинку сам)
+check("превью: без локалки → /thumb, а не прямая ссылка на CDN",
+  !!bImg && bImg.src === "/degg_lora_loader/thumb?file=b.safetensors",
+  bImg ? bImg.src : "нет img");
 DL.openPicker(node);
 const modal = documentStub.body.children[documentStub.body.children.length - 1];
 check("openPicker: модалка в document.body", !!modal && String(modal.className).includes("dl-modal"));
@@ -1146,18 +1248,23 @@ const itemB = itemsNow.find((e) => {
   return lb && lb.textContent === "b.safetensors";
 });
 const bPImg = itemB ? byClass(itemB, "dl-pthumb") : null;
-check("picker: сайт-картинка b из /info (images[0])", !!bPImg && bPImg.src === "https://img/site-b.png",
+check("picker: превью b через /thumb (ленивая подгрузка)",
+  !!bPImg && bPImg.src === "/degg_lora_loader/thumb?file=b.safetensors",
   bPImg ? bPImg.src : "нет img");
 check("picker: нет img с пустым src", findAll(modal, (e) => e.tagName === "IMG" && !e.src).length === 0,
   JSON.stringify(findAll(modal, (e) => e.tagName === "IMG").map((e) => e.src)));
 check("picker: ленивая загрузка (loading=lazy)",
   findAll(modal, (e) => e.tagName === "IMG").every((e) => e.loading === "lazy"));
-check("picker: глиф для lora без картинок", (() => {
+check("picker: битая картинка лоры уступает место глифу", (() => {
   const itemC = itemsNow.find((e) => {
     const lb = byClass(e, "dl-plabel");
     return lb && lb.textContent === "sub/c.safetensors";
   });
-  return !!itemC && !!byClass(itemC, "dl-glyph");
+  const host = itemC && byClass(itemC, "dl-pt");
+  const img = host && byClass(host, "dl-pthumb");
+  if (!img) return false;
+  img.dispatch("error");
+  return !!byClass(host, "dl-glyph");
 })());
 check("picker: IntersectionObserver создан над скролл-боксом",
   IO_INSTANCES.length >= 1
@@ -1173,8 +1280,9 @@ const itemD = itemsNow.find((e) => {
   return lb && lb.textContent === "d.safetensors";
 });
 const dPImg = itemD ? byClass(itemD, "dl-pthumb") : null;
-check("picker: некэшированная lora получила сайт-картинку после наблюдения",
-  !!dPImg && dPImg.src === "https://img/site-d.png", dPImg ? dPImg.src : "нет img");
+check("picker: некэшированная lora получила /thumb после наблюдения",
+  !!dPImg && dPImg.src === "/degg_lora_loader/thumb?file=d.safetensors",
+  dPImg ? dPImg.src : "нет img");
 DL.closeModal();
 check("closeModal: модалка убрана", documentStub.body.children.length === 0,
   String(documentStub.body.children.length));

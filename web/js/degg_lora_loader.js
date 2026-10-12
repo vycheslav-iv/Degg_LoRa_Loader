@@ -324,12 +324,15 @@ function fetchInfo(name) {
   return run;
 }
 
-function siteThumb(info) {
-  if (info && Array.isArray(info.images) && info.images.length) {
-    const im0 = info.images[0];
-    if (im0 && typeof im0.url === "string" && im0.url) return im0.url;
-  }
-  return "";
+// Дефолтное превью отдаёт сервер: /thumb (соседний файл → дисковый кэш →
+// картинка CivitAI качается один раз). Прямая ссылка на CDN тянула картинку
+// при каждом открытии страницы и ждала очередь /info.
+function thumbUrl(name) {
+  return "/degg_lora_loader/thumb?file=" + encodeURIComponent(String(name || ""));
+}
+
+function thumbUrlAt(name, idx) {
+  return thumbUrl(name) + "&idx=" + String(idx | 0);
 }
 
 function paintThumb(host, src, cls) {
@@ -338,7 +341,9 @@ function paintThumb(host, src, cls) {
     const img = mk("img", cls);
     img.loading = "lazy";
     img.addEventListener("error", function () {
-      img.style.display = "none";
+      // Превью могло исчезнуть (лора удалена, кэш почищен) — показываем глиф,
+      // а не пустую рамку.
+      paintThumb(host, "", cls);
     });
     img.src = src;
     host.appendChild(img);
@@ -350,10 +355,8 @@ function paintThumb(host, src, cls) {
 function attachThumb(host, name, entry, cls, lazy) {
   if (!host) return;
   const custom = entry && typeof entry.preview === "string" && entry.preview ? entry.preview : "";
-  const local = thumbSrc(name);
-  const direct = custom || local;
-  if (direct) {
-    paintThumb(host, direct, cls);
+  if (custom) {
+    paintThumb(host, custom, cls);
     return;
   }
   const key = String(name || "");
@@ -367,11 +370,9 @@ function attachThumb(host, name, entry, cls, lazy) {
     LAZY_OBSERVER.observe(host);
     return;
   }
-  fetchInfo(key).then(function (info) {
-    const src = siteThumb(info);
-    THUMB_MEM[key] = src;
-    paintThumb(host, src, cls);
-  });
+  const src = thumbUrl(key);
+  THUMB_MEM[key] = src;
+  paintThumb(host, src, cls);
 }
 
 // Иконки lucide (minus/plus) — как в нативном виджете силы.
@@ -1064,6 +1065,18 @@ function setPreview(node, index, url) {
   closeModal();
 }
 
+// Перевод уже сохранённого превью с CDN-URL на локальный /thumb?idx (та же
+// картинка, но берётся с диска). Без него старые воркфлоу остались бы медленными.
+function migratePreview(node, index, url) {
+  const s = ensureState(node);
+  const entry = s.entries[index];
+  if (!entry || !url || entry.preview === url) return false;
+  entry.preview = url;
+  syncData(node);
+  render(node);
+  return true;
+}
+
 // Единая карточка LoRA: клик по превью И по имени открывают её же.
 // Сверху — детали (имя-ссылка на CivitAI, baseModel, триггеры, описание,
 // permalink), ниже — сетка кандидатов превью + upload/reset.
@@ -1142,10 +1155,16 @@ function openLoraCard(node, index, fallbackName) {
   document.body.appendChild(modal);
   return fetchInfo(loraName).then(function (info) {
     buildDetails(details, loraName, info || null);
-    if (entry && info && Array.isArray(info.images)) {
-      for (const im of info.images) {
+    const images = (info && Array.isArray(info.images)) ? info.images : [];
+    if (entry && images.length) {
+      for (let i = 0; i < images.length; i++) {
+        const im = images[i];
         if (!im || typeof im.url !== "string" || !im.url) continue;
-        addCand(im.url, entry.preview === im.url);
+        // Кандидат отдаёт сервер (/thumb?idx): выбранное превью остаётся
+        // локальным, а не ссылкой на CDN, которая качается при каждом открытии.
+        const local = thumbUrlAt(loraName, i);
+        if (entry.preview === im.url) migratePreview(node, index, local);
+        addCand(local, entry.preview === local || entry.preview === im.url);
       }
     }
     return info || null;
@@ -1156,12 +1175,56 @@ function openPreviewPicker(node, index) {
   return openLoraCard(node, index);
 }
 
+const PREVIEW_NAME_PREFIX = "degg_lora_preview_";
+const PREVIEW_EXTS = [".png", ".jpg", ".jpeg", ".webp"];
+
+function previewExt(name) {
+  const match = /\.([A-Za-z0-9]+)$/.exec(String(name || ""));
+  const ext = match ? "." + match[1].toLowerCase() : "";
+  return PREVIEW_EXTS.indexOf(ext) >= 0 ? ext : ".png";
+}
+
+// Имя файла кастомного превью: degg_lora_preview_<sha256(лоры)>_<ts>.<ext>.
+// По этому хешу сервер убирает превью лор, которых больше нет на диске (мусор
+// не копится без ручной чистки). Нет crypto.subtle (не-secure context) —
+// оставляем имя как есть: такой файл подчистит только TTL.
+function previewFileName(lora, original) {
+  const ext = previewExt(original);
+  const subtle = (typeof window !== "undefined" && window.crypto && window.crypto.subtle) || null;
+  if (!subtle || typeof subtle.digest !== "function" || typeof TextEncoder === "undefined") {
+    return Promise.resolve(original);
+  }
+  let data;
+  try {
+    data = new TextEncoder().encode(String(lora || ""));
+  } catch (e) {
+    return Promise.resolve(original);
+  }
+  return subtle.digest("SHA-256", data).then(function (buffer) {
+    const bytes = new Uint8Array(buffer);
+    let hex = "";
+    for (let i = 0; i < bytes.length; i++) {
+      hex += (bytes[i] < 16 ? "0" : "") + bytes[i].toString(16);
+    }
+    return PREVIEW_NAME_PREFIX + hex + "_" + Date.now() + ext;
+  }).catch(function () {
+    return original;
+  });
+}
+
 function uploadPreview(node, index, file) {
   const s = ensureState(node);
   const entry = s.entries[index];
   if (!entry || !file) return Promise.resolve(null);
+  const original = file.name || "preview.png";
+  return previewFileName(entry.lora, original).then(function (name) {
+    return sendPreview(node, index, file, name);
+  });
+}
+
+function sendPreview(node, index, file, name) {
   const fd = new FormData();
-  fd.append("image", file, file.name || "preview.png");
+  fd.append("image", file, name);
   return fetch("/upload/image", { method: "POST", body: fd })
     .then(function (res) {
       return res && res.ok ? res.json() : null;
@@ -1349,6 +1412,9 @@ window.DeggLoraLoader = {
   openInfo: openInfo,
   openPreviewPicker: openPreviewPicker,
   setPreview: setPreview,
+  migratePreview: migratePreview,
+  thumbUrl: thumbUrl,
+  thumbUrlAt: thumbUrlAt,
   uploadPreview: uploadPreview,
   refreshLabels: refreshLabels,
   setLocaleOverride: setLocaleOverride,

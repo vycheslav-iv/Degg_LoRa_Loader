@@ -92,6 +92,19 @@ if (PY) {
     has(PY, new RegExp(`def ${fn}\\(`), `python: def ${fn}()`);
   }
 
+  // Сборка мусора (этап 2)
+  for (const fn of ["sweep_cache", "ttl_sweep", "sweep_input_previews", "drop_thumb_cache"]) {
+    has(PY, new RegExp(`def ${fn}\\(`), `python: def ${fn}()`);
+  }
+  check("python: предохранитель sweep — пустой листинг лор не чистит",
+    /if not active_names:\s*\n\s*return 0/.test(PY));
+  (() => {
+    const pyPrefix = (PY.match(/PREVIEW_NAME_PREFIX = "([^"]+)"/) || [])[1];
+    const jsPrefix = (JS ? JS.match(/PREVIEW_NAME_PREFIX = "([^"]+)"/) : []) || [];
+    check("js и python: один префикс кастомного превью (иначе sweep не найдёт файлы)",
+      !!pyPrefix && pyPrefix === jsPrefix[1], `js=${jsPrefix[1]} py=${pyPrefix}`);
+  })();
+
   // Кэш CivitAI
   has(PY, /degg_lora_cache/, "python: кэш-папка degg_lora_cache");
   has(PY, /civitai\.com\/api\/v1\/model-versions\/by-hash\//, "python: CivitAI by-hash endpoint");
@@ -115,13 +128,17 @@ if (PY) {
     JSON.stringify([...pyOptional, ...pyInputs]));
   check("python: нет combo-входов (значения протокольны)", !/\(\s*\[[^\]]+","/.test(block));
 
-  // Ровно 3 роута
+  // Ровно 4 роута
   const pyRoutes = [...new Set([...PY.matchAll(/@routes\.(?:get|post)\("([^"]+)"\)/g)].map((m) => m[1]))].sort();
-  check("python: ровно 3 роута", pyRoutes.length === 3, JSON.stringify(pyRoutes));
-  check("python: роуты = loras/img/info",
+  check("python: ровно 4 роута", pyRoutes.length === 4, JSON.stringify(pyRoutes));
+  check("python: роуты = img/info/loras/thumb",
     JSON.stringify(pyRoutes) === JSON.stringify([
-      "/degg_lora_loader/img", "/degg_lora_loader/info", "/degg_lora_loader/loras",
+      "/degg_lora_loader/img", "/degg_lora_loader/info",
+      "/degg_lora_loader/loras", "/degg_lora_loader/thumb",
     ]), JSON.stringify(pyRoutes));
+  check("python: блокирующая работа уходит в поток (asyncio.to_thread)",
+    (PY.match(/asyncio\.to_thread\(/g) || []).length >= 4,
+    String((PY.match(/asyncio\.to_thread\(/g) || []).length));
   check("python: роуты без параметра декоратора",
     !/@routes\.(?:get|post)\([^"]*\{/.test(PY));
 }
@@ -246,13 +263,20 @@ if (JS) {
 
   // Безопасность и сети
   has(JSC, /encodeURIComponent\(/, "js: query-параметры кодируются");
-  check("js: sha256 НЕ вычисляется на клиенте", !/crypto\.subtle/.test(JSC));
+  // Раньше клиенту запрещалось считать sha256 ВООБЩЕ (хеш содержимого лоры для
+  // CivitAI — дело сервера). Теперь клиент хеширует только ИМЯ лоры: кастомное
+  // превью получает имя degg_lora_preview_<sha256(имя)>_<ts>, по которому сервер
+  // убирает превью удалённых лор. Хеш содержимого/by-hash — по-прежнему сервер.
+  check("js: клиент не строит by-hash и не читает содержимое лоры",
+    !/by-hash|arrayBuffer|FileReader/.test(JSC));
+  has(JSC, /crypto\.subtle/, "js: crypto.subtle — только для имени файла превью");
   has(JSC, /replace\(/, "js: описание CivitAI очищается от разметки");
 
   // Единый резолвер превью (T1)
   has(JSC, /attachThumb\(/, "js: единый резолвер attachThumb");
   has(JSC, /INFO_MEM/, "js: кэш /info INFO_MEM (включая негативный)");
-  has(JSC, /images\[0\]/, "js: сайт-превью = images[0] первой картинки /info");
+  has(JSC, /thumbUrl\(/, "js: превью строки берётся через свой роут /thumb, не с CDN");
+  has(JSC, /info\.images/, "js: карточка берёт кандидатов из images[] /info");
   has(JSC, /loading\s*=\s*"lazy"/, "js: loading=lazy (рыночные картинки полноразмерные)");
 
   // Ленивые сайт-превью в пикере (T6)
@@ -287,8 +311,10 @@ if (JS) {
   const jsRoutes = [...new Set(JS.match(/\/degg_lora_loader\/[a-z_]+/g))].sort();
   const pyRoutes2 = PY ? [...new Set([...PY.matchAll(/@routes\.(?:get|post)\("([^"]+)"\)/g)].map((m) => m[1]))].sort() : [];
   check("js и python: одни и те же роуты",
-    jsRoutes.length === 3 && JSON.stringify(jsRoutes) === JSON.stringify(pyRoutes2),
+    jsRoutes.length === 4 && JSON.stringify(jsRoutes) === JSON.stringify(pyRoutes2),
     `js=${JSON.stringify(jsRoutes)} py=${JSON.stringify(pyRoutes2)}`);
+  check("js: превью идёт через свой роут /thumb, а не напрямую на CDN",
+    /\/degg_lora_loader\/thumb\?file=/.test(JS), "нет /thumb в JS");
 
   // Согласованность имён виджетов
   if (PY) {
